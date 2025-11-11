@@ -25,10 +25,29 @@ const PORT = process.env.PORT || 3001;
 
 // -------------------------------------------------------------
 // Global Middleware
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-  credentials: true,
-}));
+const rawCorsOrigins = process.env.CORS_ORIGIN || 'http://localhost:3000';
+const allowedOrigins = rawCorsOrigins
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, curl, Postman)
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`Not allowed by CORS: ${origin}`));
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 // Logging middleware
@@ -38,6 +57,17 @@ app.use((req, res, next) => {
 });
 
 // -------------------------------------------------------------
+// Root routes for Render keep-alive and restart simulation
+app.get('/', (req, res) => {
+  res.json({ status: 'backend up', timestamp: new Date().toISOString() });
+});
+
+app.post('/', (req, res) => {
+  // Simulate restart request (Render free tier doesn't support API restarts)
+  console.log('Restart request received');
+  res.status(202).json({ message: 'Restart requested' });
+});
+
 // Health check route
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
