@@ -10,6 +10,53 @@ const toNumber = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const FIFO_SALE_KEYWORDS = [
+  'sell',
+  'redeem',
+  'withdraw',
+  'switch out',
+  'switch-out',
+  'switch to',
+  'switch-to',
+  'stp out',
+  'stp-out',
+  'charges',
+  'charge',
+  'exit',
+  'migration',
+  'transfer',
+  'payout',
+];
+
+const reduceLotUnits = (lots = [], unitsToRemove = 0) => {
+  if (!Array.isArray(lots) || !lots.length) return;
+  if (!Number.isFinite(unitsToRemove) || unitsToRemove <= 1e-8) return;
+
+  let remaining = unitsToRemove;
+  lots.sort((a, b) => {
+    const orderDiff = (a.order ?? Number.POSITIVE_INFINITY) - (b.order ?? Number.POSITIVE_INFINITY);
+    if (Math.abs(orderDiff) > 1e-8) return orderDiff;
+    return (a.sequence ?? 0) - (b.sequence ?? 0);
+  });
+
+  while (remaining > 1e-8 && lots.length) {
+    const currentLot = lots[0];
+    const deduction = Math.min(remaining, currentLot.units);
+    const costPerUnit = currentLot.units ? currentLot.cost / currentLot.units : 0;
+
+    currentLot.units -= deduction;
+    currentLot.cost -= deduction * costPerUnit;
+    remaining -= deduction;
+
+    if (currentLot.units <= 1e-8 || currentLot.cost <= 1e-8) {
+      lots.shift();
+    } else {
+      currentLot.units = Math.max(currentLot.units, 0);
+      currentLot.cost = Math.max(currentLot.cost, 0);
+    }
+  }
+};
+
 /**
  * Calculate bank holdings from latest month
  */
@@ -120,10 +167,82 @@ export function calculatePPFHoldings(transactions = []) {
     totalInterest += interest;
   });
 
+  const totalValue = totalInvested + totalInterest;
+
   return {
     invested: totalInvested,
     interest: totalInterest,
-    total: totalInvested + totalInterest,
+    total: totalValue,
+    marketValue: totalValue,
+  };
+}
+
+/**
+ * Calculate FD holdings
+ */
+export function calculateFDHoldings(transactions = []) {
+  if (!Array.isArray(transactions) || !transactions.length) {
+    return { invested: 0, interest: 0, total: 0, marketValue: 0 };
+  }
+
+  const grouped = transactions.reduce((acc, txn) => {
+    const key = `${txn.account_name || 'unknown'}||${txn.bank_name || ''}`;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(txn);
+    return acc;
+  }, {});
+
+  let totalInvested = 0;
+  let totalInterest = 0;
+
+  Object.values(grouped).forEach((accountTxns) => {
+    accountTxns.sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
+
+    let invested = 0;
+    let interest = 0;
+
+    accountTxns.forEach((txn) => {
+      const amount = toNumber(txn.amount);
+      const type = String(txn.transaction_type || '').toLowerCase();
+
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return;
+      }
+
+      if (type.includes('deposit') || type.includes('create') || type.includes('open')) {
+        invested += amount;
+      } else if (type.includes('interest')) {
+        interest += amount;
+      } else if (type.includes('maturity')) {
+        // maturity amount includes principal + interest
+        // treat as withdrawal of principal; excess goes to interest if any
+        let remaining = amount;
+        const reduceInterest = Math.min(remaining, interest);
+        interest -= reduceInterest;
+        remaining -= reduceInterest;
+        const reduceDeposit = Math.min(remaining, invested);
+        invested -= reduceDeposit;
+      } else if (type.includes('withdraw')) {
+        let remaining = amount;
+        const reduceInterest = Math.min(remaining, interest);
+        interest -= reduceInterest;
+        remaining -= reduceInterest;
+        const reduceDeposit = Math.min(remaining, invested);
+        invested -= reduceDeposit;
+      }
+    });
+
+    totalInvested += Math.max(invested, 0);
+    totalInterest += Math.max(interest, 0);
+  });
+
+  const totalValue = totalInvested + totalInterest;
+
+  return {
+    invested: totalInvested,
+    interest: totalInterest,
+    total: totalValue,
+    marketValue: totalValue,
   };
 }
 
@@ -131,8 +250,9 @@ export function calculatePPFHoldings(transactions = []) {
  * Calculate EPF holdings
  */
 export function calculateEPFHoldings(transactions = []) {
-  let totalInvested = 0;
-  let totalInterest = 0;
+  let deposits = 0;
+  let interest = 0;
+  let withdrawal = 0;
 
   (transactions || []).forEach((txn) => {
     const amount = toNumber(txn.employee_share) + toNumber(txn.employer_share) + toNumber(txn.pension_share);
@@ -141,23 +261,18 @@ export function calculateEPFHoldings(transactions = []) {
     const type = String(txn.invest_type || '').toLowerCase();
 
     if (type.includes('withdraw')) {
-      let remaining = amount;
-      const reduceInterest = Math.min(remaining, totalInterest);
-      totalInterest -= reduceInterest;
-      remaining -= reduceInterest;
-      const reduceDeposit = Math.min(remaining, totalInvested);
-      totalInvested -= reduceDeposit;
+      withdrawal += amount;
     } else if (type.includes('interest')) {
-      totalInterest += amount;
+      interest += amount;
     } else {
-      totalInvested += amount;
+      deposits += amount;
     }
   });
 
   return {
-    invested: Math.max(totalInvested, 0),
-    interest: totalInterest,
-    total: Math.max(totalInvested, 0) + totalInterest,
+    invested: Math.max(deposits - withdrawal, 0),
+    interest: interest,
+    total: deposits + interest - withdrawal,
   };
 }
 
@@ -199,14 +314,13 @@ export function calculateNPSHoldings(transactions = [], cmpMap = new Map()) {
 
   preparedTransactions.forEach((txn) => {
     const { schemeName, accountName, type, units, nav, effectiveDate, index } = txn;
-    const key = `${schemeName}||${accountName}`;
+    const normalizedScheme = schemeName.replace(/\|\|/g, '∥');
+    const normalizedAccount = accountName.replace(/\|\|/g, '∥');
+    const key = `${normalizedScheme}||${normalizedAccount}`;
     if (!lotsByScheme.has(key)) {
       lotsByScheme.set(key, []);
     }
     const lots = lotsByScheme.get(key);
-
-    const FIFO_KEYWORDS = ['sell', 'redeem', 'withdraw', 'switch out', 'exit'];
-    const isSaleType = units < 0 || FIFO_KEYWORDS.some((kw) => type.includes(kw));
 
     if (type.includes('buy') && units > 0) {
       lots.push({
@@ -216,17 +330,13 @@ export function calculateNPSHoldings(transactions = [], cmpMap = new Map()) {
         order: effectiveDate ? effectiveDate.getTime() : Number.POSITIVE_INFINITY,
         sequence: index,
       });
-    } else if (isSaleType) {
-      let remaining = Math.abs(units);
-      while (remaining > 1e-8 && lots.length) {
-        const lot = lots[0];
-        const deduction = Math.min(remaining, lot.units);
-        lot.units -= deduction;
-        remaining -= deduction;
-        if (lot.units <= 1e-8) {
-          lots.shift();
-        }
-      }
+      return;
+    }
+
+    const isSaleType = units < 0 || FIFO_SALE_KEYWORDS.some((kw) => type.includes(kw));
+    if (isSaleType) {
+      const unitsToRemove = units < 0 ? Math.abs(units) : units;
+      reduceLotUnits(lots, unitsToRemove);
     }
   });
 
@@ -261,17 +371,6 @@ export function calculateNPSHoldings(transactions = [], cmpMap = new Map()) {
     marketValue: totalMarketValue,
     invested: totalInvested,
     holdings,
-  };
-}
-
-/**
- * Calculate FD holdings (placeholder - no transactions, manual entry)
- */
-export function calculateFDHoldings() {
-  return {
-    invested: 0,
-    marketValue: 0,
-    total: 0,
   };
 }
 

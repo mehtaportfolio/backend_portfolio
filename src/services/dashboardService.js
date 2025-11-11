@@ -24,7 +24,7 @@ const toNumber = (value) => {
 /**
  * Build CMPs map from master tables
  */
-function buildCMPMaps(data) {
+export function buildCMPMaps(data) {
   const stockCmpMap = new Map();
   const fundCmpMap = new Map();
   const npsCmpMap = new Map();
@@ -66,22 +66,40 @@ export async function getDashboardAssetAllocation(supabase, userId) {
     // Build CMP maps
     const { stockCmpMap, fundCmpMap, npsCmpMap } = buildCMPMaps(data);
 
+    // Calculate total equity charges
+    const totalEquityCharges = (data.equity_charges?.data || []).reduce((sum, charge) => {
+      return sum + toNumber(charge.other_charges) + toNumber(charge.dp_charges);
+    }, 0);
+
     // Calculate all asset types
     const stockData = calculateStockLots(data.stock_transactions?.data, stockCmpMap);
     const mfData = calculateMFLots(data.mf_transactions?.data, fundCmpMap);
     const bankData = calculateBankHoldings(data.bank_transactions?.data);
-    const ppfData = calculatePPFHoldings(data.ppf_transactions?.data);
+
+    const ppfTransactions = (data.ppf_transactions?.data || []).filter(
+      (txn) => String(txn.account_type || '').toLowerCase() === 'ppf'
+    );
+    const fdTransactions = (data.ppf_transactions?.data || []).filter(
+      (txn) => String(txn.account_type || '').toLowerCase() === 'fd'
+    );
+
+    const ppfData = calculatePPFHoldings(ppfTransactions);
+    const fdData = calculateFDHoldings(fdTransactions);
+
     const epfData = calculateEPFHoldings(data.epf_transactions?.data);
     const npsData = calculateNPSHoldings(data.nps_transactions?.data, npsCmpMap);
-    const fdData = calculateFDHoldings();
+
+    // Calculate total invested value
+    let totalInvestedValue = stockData.stock.invested + stockData.etf.invested + mfData.invested + bankData.total + (ppfData.invested || 0) + epfData.invested + npsData.invested + fdData.invested;
+    totalInvestedValue -= totalEquityCharges;
 
     // Build asset rows
     const rows = [
       {
         assetType: 'Stock',
         marketValue: stockData.stock.marketValue,
-        investedValue: stockData.stock.invested,
-        simpleProfit: stockData.stock.marketValue - stockData.stock.invested,
+        investedValue: stockData.stock.invested - totalEquityCharges,
+        simpleProfit: stockData.stock.marketValue - (stockData.stock.invested - totalEquityCharges),
       },
       {
         assetType: 'ETF',
@@ -103,9 +121,9 @@ export async function getDashboardAssetAllocation(supabase, userId) {
       },
       {
         assetType: 'PPF',
-        marketValue: ppfData.total,
+        marketValue: ppfData.marketValue ?? ppfData.total,
         investedValue: ppfData.invested,
-        simpleProfit: ppfData.interest,
+        simpleProfit: (ppfData.marketValue ?? ppfData.total) - ppfData.invested,
       },
       {
         assetType: 'EPF',
@@ -123,13 +141,12 @@ export async function getDashboardAssetAllocation(supabase, userId) {
         assetType: 'FD',
         marketValue: fdData.marketValue,
         investedValue: fdData.invested,
-        simpleProfit: fdData.total - fdData.invested,
+        simpleProfit: fdData.marketValue - fdData.invested,
       },
     ];
 
-    // Calculate totals and allocations
+    // Calculate total market value
     const totalMarketValue = rows.reduce((sum, row) => sum + row.marketValue, 0);
-    const totalInvestedValue = rows.reduce((sum, row) => sum + row.investedValue, 0);
     const totalProfit = totalMarketValue - totalInvestedValue;
 
     // Add allocation percentages
@@ -140,6 +157,8 @@ export async function getDashboardAssetAllocation(supabase, userId) {
       simpleProfitPercent:
         row.investedValue > 1e-8 ? (row.simpleProfit / row.investedValue) * 100 : 0,
     }));
+
+    // Note: Allocations are based on pre-charge invested values for individual assets
 
     const summary = {
       totalMarketValue,

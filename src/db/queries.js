@@ -12,30 +12,73 @@
  */
 export async function fetchAllRows(supabase, tableName, options = {}) {
   try {
-    const { select = '*', filter, order, limit = 10000 } = options;
+    const {
+      select = '*',
+      filter,
+      filters,
+      order,
+      limit,
+      chunkSize = 1000,
+    } = options;
 
-    let query = supabase.from(tableName).select(select);
+    const effectiveChunkSize = Number.isInteger(chunkSize) && chunkSize > 0 ? chunkSize : 1000;
+    const maxRows = Number.isInteger(limit) && limit > 0 ? limit : Infinity;
+    const results = [];
+    let from = 0;
 
-    if (filter) {
-      Object.entries(filter).forEach(([key, value]) => {
-        query = query.eq(key, value);
-      });
+    const buildQuery = () => {
+      let query = supabase.from(tableName).select(select);
+
+      if (filter) {
+        Object.entries(filter).forEach(([key, value]) => {
+          query = query.eq(key, value);
+        });
+      }
+
+      if (Array.isArray(filters)) {
+        filters.forEach((applyFilter) => {
+          if (typeof applyFilter === 'function') {
+            const maybeQuery = applyFilter(query);
+            if (maybeQuery && typeof maybeQuery.select === 'function') {
+              query = maybeQuery;
+            }
+          }
+        });
+      }
+
+      if (order) {
+        query = query.order(order.column, { ascending: order.ascending ?? true });
+      }
+
+      return query;
+    };
+
+    while (results.length < maxRows) {
+      const remaining = maxRows === Infinity ? effectiveChunkSize : Math.min(effectiveChunkSize, maxRows - results.length);
+      if (remaining <= 0) break;
+
+      const query = buildQuery().range(from, from + remaining - 1);
+      const { data, error } = await query;
+
+      if (error) {
+        console.error(`Query error for ${tableName}:`, error);
+        return { data: [], error };
+      }
+
+      if (!data?.length) {
+        break;
+      }
+
+      results.push(...data);
+
+      if (data.length < remaining) {
+        break;
+      }
+
+      from += remaining;
     }
 
-    if (order) {
-      query = query.order(order.column, { ascending: order.ascending ?? true });
-    }
-
-    query = query.limit(limit);
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.error(`Query error for ${tableName}:`, error);
-      return { data: [], error };
-    }
-
-    return { data: data || [], error: null };
+    return { data: results, error: null };
   } catch (error) {
     console.error(`Fetch error for ${tableName}:`, error);
     return { data: [], error };
@@ -77,7 +120,7 @@ export async function fetchUserAllData(supabase, userId) {
 
   const queries = {
     stock_transactions: {
-      select: 'stock_name, quantity, buy_price, sell_date, account_type, buy_date',
+      select: 'stock_name, quantity, buy_price, sell_date, account_type, buy_date, account_name',
     },
     stock_master: {
       select: 'stock_name, cmp',
@@ -103,6 +146,9 @@ export async function fetchUserAllData(supabase, userId) {
     },
     nps_pension_fund_master: {
       select: 'scheme_name, cmp',
+    },
+    equity_charges: {
+      select: 'account_name, year, fy, other_charges, dp_charges',
     },
   };
 

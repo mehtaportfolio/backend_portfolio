@@ -103,13 +103,13 @@ export async function getNPSData() {
   try {
     const [{ data: npsTransactions, error: txnError }, { data: fundMaster, error: fundError }, { data: contributions, error: contribError }] = await Promise.all([
       fetchAllRows(supabase, 'nps_transactions', {
-        select: 'id, account_name, purchase_fund, amount, txn_date, nav, units',
+        select: 'id, account_name, fund_name, date, nav, units, transaction_type',
       }),
       fetchAllRows(supabase, 'nps_pension_fund_master', {
-        select: 'scheme_name, cmp',
+        select: 'fund_name, cmp, lcp',
       }),
       fetchAllRows(supabase, 'nps_contributions', {
-        select: 'id, contribution_type, amount, contribution_date',
+        select: 'id, date, amount',
       }),
     ]);
 
@@ -118,14 +118,118 @@ export async function getNPSData() {
       throw txnError || fundError || contribError;
     }
 
-    // Build fund CMP map
-    const fundCmpMap = new Map((fundMaster || []).map((f) => [String(f.scheme_name).trim(), toNumber(f.cmp)]));
+    // Compute amount for transactions as units * nav
+    const transactionsWithAmount = (npsTransactions || []).map((txn) => ({
+      ...txn,
+      amount: toNumber(txn.units) * toNumber(txn.nav),
+    }));
+
+    // Contributions already have amount
+    const contributionsWithAmount = (contributions || []).map((contrib) => ({
+      ...contrib,
+      amount: toNumber(contrib.amount),
+    }));
+
+    // Build fund master map
+    const fundMasterMap = {};
+    (fundMaster || []).forEach((f) => {
+      const key = String(f.fund_name || f.scheme_name || '').trim();
+      fundMasterMap[key] = {
+        cmp: toNumber(f.cmp),
+        lcp: toNumber(f.lcp),
+        fund_name: f.fund_name,
+        scheme_name: f.scheme_name,
+      };
+    });
+
+    // Group transactions by fund_name and process with FIFO logic
+    const holdingsByFund = {};
+    (npsTransactions || []).forEach((txn) => {
+      const fundName = String(txn.fund_name || '').trim();
+      const master = fundMasterMap[fundName];
+      if (!master) return;
+
+      if (!holdingsByFund[fundName]) {
+        holdingsByFund[fundName] = {
+          fund_name: fundName,
+          units: 0,
+          invested: 0,
+          currentValue: 0,
+          dayChange: 0,
+          cmp: master.cmp,
+          lcp: master.lcp,
+          transactions: [],
+        };
+      }
+      holdingsByFund[fundName].transactions.push(txn);
+    });
+
+    // Process each fund with FIFO logic to calculate remaining holdings
+    Object.values(holdingsByFund).forEach((holding) => {
+      const master = fundMasterMap[holding.fund_name];
+      if (!master) return;
+
+      // Sort transactions chronologically
+      holding.transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+      // FIFO lots for remaining units
+      const lots = [];
+      let totalInvested = 0;
+
+      holding.transactions.forEach((txn) => {
+        const units = toNumber(txn.units);
+        const nav = toNumber(txn.nav);
+        const transactionType = String(txn.transaction_type || '').toLowerCase();
+
+        if (transactionType.includes('buy') && units > 0) {
+          // Buy transaction - add to lots
+          lots.push({ units: units, nav: nav, date: new Date(txn.date) });
+          totalInvested += units * nav;
+        } else if (transactionType.includes('sell') && units > 0) {
+          // Sell transaction - consume from oldest lots (FIFO)
+          let remainingToSell = units;
+          while (remainingToSell > 0 && lots.length > 0) {
+            const oldestLot = lots[0];
+            if (oldestLot.units <= remainingToSell) {
+              // Consume entire lot
+              totalInvested -= oldestLot.units * oldestLot.nav;
+              remainingToSell -= oldestLot.units;
+              lots.shift();
+            } else {
+              // Consume partial lot
+              totalInvested -= remainingToSell * oldestLot.nav;
+              oldestLot.units -= remainingToSell;
+              remainingToSell = 0;
+            }
+          }
+        }
+      });
+
+      // Calculate remaining units from lots
+      const remainingUnits = lots.reduce((sum, lot) => sum + lot.units, 0);
+      holding.units = remainingUnits;
+      holding.invested = totalInvested;
+      holding.currentValue = remainingUnits * holding.cmp;
+      holding.dayChange = remainingUnits * (holding.cmp - holding.lcp);
+    });
+
+    // Calculate summary
+    const summary = {
+      invested: Object.values(holdingsByFund).reduce((sum, h) => sum + h.invested, 0),
+      currentValue: Object.values(holdingsByFund).reduce((sum, h) => sum + h.currentValue, 0),
+      dayChange: Object.values(holdingsByFund).reduce((sum, h) => sum + h.dayChange, 0),
+    };
+
+    // Build fund CMP map (legacy)
+    const fundCmpMap = new Map(Object.entries(fundMasterMap).map(([k, v]) => [k, v.cmp]));
 
     return {
-      transactions: npsTransactions || [],
+      transactions: transactionsWithAmount,
       fundMaster: fundMaster || [],
-      contributions: contributions || [],
+      contributions: contributionsWithAmount,
       fundCmpMap: Object.fromEntries(fundCmpMap),
+      holdings: Object.values(holdingsByFund),
+      summary,
     };
   } catch (error) {
     console.error('Error in getNPSData:', error);
@@ -140,8 +244,8 @@ export async function getNPSData() {
 export async function getBDMData() {
   try {
     const { data, error } = await fetchAllRows(supabase, 'bdm_transactions', {
-      select: 'id, account_name, amount, txn_date, transaction_type, category',
-      order: { column: 'txn_date', ascending: false },
+      select: 'id, account_name, amount, date, transaction_type, category',
+      order: { column: 'date', ascending: false },
     });
 
     if (error) {
@@ -181,7 +285,7 @@ export async function getBDMData() {
 export async function getEPFData() {
   try {
     const { data, error } = await fetchAllRows(supabase, 'epf_transactions', {
-      select: 'id, employee_share, employer_share, pension_share, invest_type, contribution_date, company_name, account_number',
+      select: 'id, employee_share, employer_share, pension_share, invest_type, contribution_date, company_name',
       order: { column: 'contribution_date', ascending: false },
     });
 
@@ -243,10 +347,10 @@ export async function getEPFData() {
  */
 export async function getPPFData() {
   try {
-    const { data, error } = await fetchAllRows(supabase, 'ppf_transactions', {
-      select: 'id, account_name, txn_date, amount, transaction_type, account_type, interest_amount',
-      order: { column: 'txn_date', ascending: true },
-    });
+    const { data, error } = await supabase
+      .from('ppf_transactions')
+      .select('id, account_name, txn_date, amount, transaction_type, account_type')
+      .order('txn_date', { ascending: true });
 
     if (error) {
       console.error('PPF data fetch error:', error);
@@ -273,15 +377,15 @@ export async function getPPFData() {
       byAccount[account].transactions.push(txn);
 
       const amount = toNumber(txn.amount);
-      const interest = toNumber(txn.interest_amount);
+      const tt = String(txn.transaction_type || '').toLowerCase();
 
-      if (String(txn.transaction_type).toLowerCase().includes('deposit')) {
+      if (tt.includes('deposit')) {
         byAccount[account].invested += amount;
+        totalInvested += amount;
+      } else if (tt.includes('interest')) {
+        byAccount[account].interest += amount;
+        totalInterest += amount;
       }
-      byAccount[account].interest += interest;
-
-      totalInvested += amount;
-      totalInterest += interest;
     });
 
     // Calculate current balance
@@ -555,6 +659,13 @@ export async function getMFData() {
       sipAccountAmounts[accName] = (sipAccountAmounts[accName] || 0) + amt;
     });
 
+    // Calculate summary
+    const summary = {
+      invested: Object.values(holdingsByFund).reduce((sum, h) => sum + h.invested, 0),
+      currentValue: Object.values(holdingsByFund).reduce((sum, h) => sum + h.currentValue, 0),
+      dayChange: Object.values(holdingsByFund).reduce((sum, h) => sum + h.dayChange, 0),
+    };
+
     return {
       transactions: txns,
       fundMaster: masters,
@@ -565,6 +676,7 @@ export async function getMFData() {
       accounts: uniqueAccounts,
       categoryColorMap,
       sipAccountAmounts,
+      summary,
     };
   } catch (error) {
     console.error('Error in getMFData:', error);

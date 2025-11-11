@@ -346,7 +346,7 @@ export async function getETFData(supabase, userId) {
       {
         select:
           'id, stock_name, quantity, buy_price, buy_date, sell_date, sell_price, account_name, account_type',
-        filters: [(q) => q.eq('account_type', 'ETF')],
+        filters: [(q) => q.ilike('account_type', 'etf')],
       }
     );
 
@@ -435,8 +435,16 @@ export async function getETFData(supabase, userId) {
       });
     });
 
+    // Calculate summary for open holdings
+    const summary = {
+      invested: holdings.reduce((sum, h) => sum + h.openHoldings.invested, 0),
+      currentValue: holdings.reduce((sum, h) => sum + h.openHoldings.marketValue, 0),
+      dayChange: holdings.reduce((sum, h) => sum + (h.openHoldings.quantity * (h.openHoldings.cmp - h.openHoldings.lcp)), 0),
+    };
+
     return {
       holdings,
+      summary,
       masterMap,
     };
   } catch (error) {
@@ -465,7 +473,7 @@ export async function getPortfolioData(supabase, userId) {
         select: 'stock_name, cmp, lcp, category, sector',
       }),
       fetchAllRows(supabase, 'equity_charges', {
-        select: 'account_name, account_type, year, fy, other_charges, dp_charges',
+        select: 'account_name, year, fy, other_charges, dp_charges',
       }),
     ]);
 
@@ -527,6 +535,38 @@ export async function getPortfolioData(supabase, userId) {
           : 0,
       xirr: calculateXIRR(openCashflows),
     };
+
+    const openSummary = openTxns.reduce((acc, txn) => {
+      const stockName = String(txn.stock_name || '').trim();
+      if (!stockName) {
+        return acc;
+      }
+
+      if (!acc[stockName]) {
+        acc[stockName] = {
+          stock_name: stockName,
+          quantity: 0,
+          invested: 0,
+          currentValue: 0,
+          dayChange: 0,
+          cmp: masterMap[stockName]?.cmp || 0,
+          lcp: masterMap[stockName]?.lcp || 0,
+        };
+      }
+
+      const group = acc[stockName];
+      const qty = toNumber(txn.quantity);
+      const buyPrice = toNumber(txn.buy_price);
+      const cmp = group.cmp;
+      const lcp = group.lcp;
+
+      group.quantity += qty;
+      group.invested += qty * buyPrice;
+      group.currentValue += qty * cmp;
+      group.dayChange += qty * (cmp - lcp);
+
+      return acc;
+    }, {});
 
     // Calculate closed stats with charges
     let closedInvested = 0;
@@ -590,6 +630,9 @@ export async function getPortfolioData(supabase, userId) {
 
     return {
       openStats,
+      openSummary: Object.values(openSummary),
+      openTransactions: openTxns,
+      closedTransactions: closedTxns,
       closedStats,
       chargesData: chargesData || [],
       masterMap,

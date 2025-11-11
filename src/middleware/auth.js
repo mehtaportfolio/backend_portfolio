@@ -27,12 +27,23 @@ export default function authMiddleware(req, res, next) {
     }
 
     // Decode payload (middle part)
+    const base64Url = parts[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
     const payload = JSON.parse(
-      Buffer.from(parts[1], 'base64').toString('utf-8')
+      Buffer.from(base64, 'base64').toString('utf-8')
     );
 
-    req.userId = payload.sub;
-    req.user = payload;
+    const userId = payload?.sub;
+
+    if (!userId) {
+      throw new Error('Token missing `sub` claim');
+    }
+
+    req.userId = userId;
+    req.user = {
+      ...payload,
+      id: userId,
+    };
   } catch (error) {
     console.error('Token decode error:', error.message);
     return res.status(401).json({ error: 'Invalid token' });

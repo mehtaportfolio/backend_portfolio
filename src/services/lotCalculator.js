@@ -75,10 +75,15 @@ export function calculateStockLots(transactions = [], cmpMap = new Map()) {
     if (!txn.stock_name) return;
     if (txn.sell_date) return; // Only open positions
 
-    const key = `${String(txn.account_type || '').toUpperCase()}||${String(txn.stock_name).trim()}`;
+    const accountName = String(txn.account_name || '').trim();
+    const accountType = String(txn.account_type || '').trim().toUpperCase();
+    const stockName = String(txn.stock_name).trim();
+
+    const key = `${accountName}||${accountType}||${stockName}`;
     const entry = aggregated.get(key) || {
-      accountType: String(txn.account_type || '').trim().toUpperCase(),
-      stockName: String(txn.stock_name).trim(),
+      accountName,
+      accountType,
+      stockName,
       quantity: 0,
       invested: 0,
     };
@@ -99,6 +104,7 @@ export function calculateStockLots(transactions = [], cmpMap = new Map()) {
     const holding = {
       stockName: entry.stockName,
       accountType: entry.accountType,
+      accountName: String(entry.accountName || '').trim(),
       quantity: entry.quantity,
       invested: invested,
       marketValue: marketValue,
