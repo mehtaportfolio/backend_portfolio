@@ -79,12 +79,14 @@ const { default: dashboardRoutes } = await import('./routes/dashboard.js');
 const { default: analysisRoutes } = await import('./routes/analysis.js');
 const { default: assetsRoutes } = await import('./routes/assets.js');
 const { default: stockRoutes } = await import('./routes/stocks.js');
+const { default: schemesRoutes } = await import('./routes/schemes.js');
 
 // Attach routes
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/analysis', analysisRoutes);
 app.use('/api/assets', assetsRoutes);
 app.use('/api/stock', stockRoutes);
+app.use('/api/schemes', schemesRoutes);
 
 // -------------------------------------------------------------
 // Error handler middleware
