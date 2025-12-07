@@ -123,13 +123,13 @@ export async function fetchUserAllData(supabase, userId) {
       select: 'stock_name, quantity, buy_price, sell_date, account_type, buy_date, account_name',
     },
     stock_master: {
-      select: 'stock_name, cmp',
+      select: 'stock_name, cmp, lcp',
     },
     mf_transactions: {
       select: 'fund_short_name, account_name, units, transaction_type, nav, date',
     },
     fund_master: {
-      select: 'fund_short_name, cmp',
+      select: 'fund_short_name, cmp, lcp',
     },
     bank_transactions: {
       select: 'account_name, bank_name, account_type, txn_date, amount',
@@ -145,7 +145,7 @@ export async function fetchUserAllData(supabase, userId) {
       select: 'scheme_name, account_name, units, transaction_type, nav, date, created_at, fund_name',
     },
     nps_pension_fund_master: {
-      select: 'scheme_name, cmp',
+      select: 'scheme_name, cmp, lcp',
     },
     equity_charges: {
       select: 'account_name, year, fy, other_charges, dp_charges',

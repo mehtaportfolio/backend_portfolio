@@ -22,26 +22,32 @@ const toNumber = (value) => {
 };
 
 /**
- * Build CMPs map from master tables
+ * Build CMPs and LCPs maps from master tables
  */
 export function buildCMPMaps(data) {
   const stockCmpMap = new Map();
+  const stockLcpMap = new Map();
   const fundCmpMap = new Map();
+  const fundLcpMap = new Map();
   const npsCmpMap = new Map();
+  const npsLcpMap = new Map();
 
   (data.stock_master?.data || []).forEach((m) => {
     stockCmpMap.set(String(m.stock_name).trim(), toNumber(m.cmp));
+    stockLcpMap.set(String(m.stock_name).trim(), toNumber(m.lcp));
   });
 
   (data.fund_master?.data || []).forEach((m) => {
     fundCmpMap.set(String(m.fund_short_name).trim(), toNumber(m.cmp));
+    fundLcpMap.set(String(m.fund_short_name).trim(), toNumber(m.lcp));
   });
 
   (data.nps_pension_fund_master?.data || []).forEach((m) => {
     npsCmpMap.set(String(m.scheme_name).trim(), toNumber(m.cmp));
+    npsLcpMap.set(String(m.scheme_name).trim(), toNumber(m.lcp));
   });
 
-  return { stockCmpMap, fundCmpMap, npsCmpMap };
+  return { stockCmpMap, stockLcpMap, fundCmpMap, fundLcpMap, npsCmpMap, npsLcpMap };
 }
 
 /**
@@ -51,7 +57,6 @@ export function buildCMPMaps(data) {
  * @returns {Promise<object>} - Asset allocation data
  */
 export async function getDashboardAssetAllocation(supabase, userId) {
-  console.log(`[Dashboard] Computing asset allocation for user: ${userId}`);
 
   try {
     // Fetch all user data in parallel
@@ -63,8 +68,8 @@ export async function getDashboardAssetAllocation(supabase, userId) {
       console.warn('[Dashboard] Some data sources had errors, proceeding with available data');
     }
 
-    // Build CMP maps
-    const { stockCmpMap, fundCmpMap, npsCmpMap } = buildCMPMaps(data);
+    // Build CMP and LCP maps
+    const { stockCmpMap, stockLcpMap, fundCmpMap, fundLcpMap, npsCmpMap, npsLcpMap } = buildCMPMaps(data);
 
     // Calculate total equity charges
     const totalEquityCharges = (data.equity_charges?.data || []).reduce((sum, charge) => {
@@ -75,7 +80,31 @@ export async function getDashboardAssetAllocation(supabase, userId) {
     const stockData = calculateStockLots(data.stock_transactions?.data, stockCmpMap);
     const mfData = calculateMFLots(data.mf_transactions?.data, fundCmpMap);
     const bankData = calculateBankHoldings(data.bank_transactions?.data);
-
+    
+    // Calculate dayChange for stocks and ETFs
+    let stockDayChange = 0;
+    let etfDayChange = 0;
+    if (stockData.holdings) {
+      stockData.holdings.forEach((holding) => {
+        const lcp = stockLcpMap.get(holding.stockName) || 0;
+        const dayChange = holding.quantity * (holding.cmp - lcp);
+        if (holding.accountType === 'ETF') {
+          etfDayChange += dayChange;
+        } else {
+          stockDayChange += dayChange;
+        }
+      });
+    }
+    // Calculate dayChange for MF
+    let mfDayChange = 0;
+    if (mfData.holdings) {
+      mfData.holdings.forEach((holding) => {
+        const lcp = fundLcpMap.get(holding.fundName) || 0;
+        const dayChange = holding.units * (holding.cmp - lcp);
+        mfDayChange += dayChange;
+      });
+    }
+    
     const ppfTransactions = (data.ppf_transactions?.data || []).filter(
       (txn) => String(txn.account_type || '').toLowerCase() === 'ppf'
     );
@@ -88,7 +117,16 @@ export async function getDashboardAssetAllocation(supabase, userId) {
 
     const epfData = calculateEPFHoldings(data.epf_transactions?.data);
     const npsData = calculateNPSHoldings(data.nps_transactions?.data, npsCmpMap);
-
+    
+    // Calculate dayChange for NPS
+    let npsDayChange = 0;
+    if (npsData.holdings) {
+      npsData.holdings.forEach((holding) => {
+        const lcp = npsLcpMap.get(holding.schemeName) || 0;
+        const dayChange = holding.units * (holding.cmp - lcp);
+        npsDayChange += dayChange;
+      });
+    }
     // Calculate total invested value
     let totalInvestedValue = stockData.stock.invested + stockData.etf.invested + mfData.invested + bankData.total + (ppfData.invested || 0) + epfData.invested + npsData.invested + fdData.invested;
 
@@ -99,48 +137,56 @@ export async function getDashboardAssetAllocation(supabase, userId) {
         marketValue: stockData.stock.marketValue,
         investedValue: stockData.stock.invested,
         simpleProfit: stockData.stock.marketValue - stockData.stock.invested,
+        dayChange: stockDayChange,
       },
       {
         assetType: 'ETF',
         marketValue: stockData.etf.marketValue,
         investedValue: stockData.etf.invested,
         simpleProfit: stockData.etf.marketValue - stockData.etf.invested,
+        dayChange: etfDayChange,
       },
       {
         assetType: 'MF',
         marketValue: mfData.marketValue,
         investedValue: mfData.invested,
         simpleProfit: mfData.marketValue - mfData.invested,
+        dayChange: mfDayChange,
       },
       {
         assetType: 'Bank',
         marketValue: bankData.total,
         investedValue: bankData.total,
         simpleProfit: 0,
+        dayChange: 0,
       },
       {
         assetType: 'PPF',
         marketValue: ppfData.marketValue ?? ppfData.total,
         investedValue: ppfData.invested,
         simpleProfit: (ppfData.marketValue ?? ppfData.total) - ppfData.invested,
+        dayChange: 0,
       },
       {
         assetType: 'EPF',
         marketValue: epfData.total,
         investedValue: epfData.invested,
         simpleProfit: epfData.interest,
+        dayChange: 0,
       },
       {
         assetType: 'NPS',
         marketValue: npsData.marketValue,
         investedValue: npsData.invested,
         simpleProfit: npsData.marketValue - npsData.invested,
+        dayChange: npsDayChange,
       },
       {
         assetType: 'FD',
         marketValue: fdData.marketValue,
         investedValue: fdData.invested,
         simpleProfit: fdData.marketValue - fdData.invested,
+        dayChange: 0,
       },
     ];
 
@@ -166,8 +212,7 @@ export async function getDashboardAssetAllocation(supabase, userId) {
       profitPercent: totalInvestedValue > 1e-8 ? (totalProfit / totalInvestedValue) * 100 : 0,
     };
 
-    console.log('[Dashboard] Computation complete');
-    console.log(`Summary - Market: ₹${totalMarketValue}, Invested: ₹${totalInvestedValue}, Profit: ₹${totalProfit}`);
+    const overallDayChange = stockDayChange + etfDayChange + mfDayChange + npsDayChange;
 
     return {
       rows: enrichedRows,

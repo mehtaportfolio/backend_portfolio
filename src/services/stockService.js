@@ -417,16 +417,39 @@ export async function getETFData(supabase, userId) {
         closedValue += qty * sellPrice;
       });
 
+      const urp = openMarketValue - openInvested;
+      const urpPct = openInvested > 1e-8 ? (urp / openInvested) * 100 : 0;
+      const avgBuyPrice = openQty > 0 ? openInvested / openQty : 0;
+
+      const cashflows = [];
+      openTxns.forEach((txn) => {
+        const qty = toNumber(txn.quantity);
+        const buyPrice = toNumber(txn.buy_price);
+        if (txn.buy_date) {
+          cashflows.push({
+            amount: -(qty * buyPrice),
+            date: new Date(txn.buy_date),
+          });
+        }
+      });
+
+      if (openQty > 0 && cmp > 0) {
+        cashflows.push({ amount: openMarketValue, date: new Date() });
+      }
+
+      const openXirr = calculateXIRR(cashflows);
+
       holdings.push({
         stock_name: group.stock_name,
-        transactions: group.transactions,
-        openHoldings: {
-          invested: openInvested,
-          marketValue: openMarketValue,
-          quantity: openQty,
-          cmp: cmp,
-          lcp: lcp,
-        },
+        livePrice: cmp,
+        lcp: lcp,
+        invested: openInvested,
+        marketValue: openMarketValue,
+        urp: urp,
+        urpPct: urpPct,
+        avgBuyPrice: avgBuyPrice,
+        xirr: openXirr,
+        transactions: openTxns,
         closedHoldings: {
           invested: closedInvested,
           value: closedValue,
@@ -437,9 +460,12 @@ export async function getETFData(supabase, userId) {
 
     // Calculate summary for open holdings
     const summary = {
-      invested: holdings.reduce((sum, h) => sum + h.openHoldings.invested, 0),
-      currentValue: holdings.reduce((sum, h) => sum + h.openHoldings.marketValue, 0),
-      dayChange: holdings.reduce((sum, h) => sum + (h.openHoldings.quantity * (h.openHoldings.cmp - h.openHoldings.lcp)), 0),
+      invested: holdings.reduce((sum, h) => sum + h.invested, 0),
+      currentValue: holdings.reduce((sum, h) => sum + h.marketValue, 0),
+      dayChange: holdings.reduce((sum, h) => {
+        const openQty = (h.transactions || []).reduce((qty, txn) => qty + toNumber(txn.quantity), 0);
+        return sum + (openQty * (h.livePrice - h.lcp));
+      }, 0),
     };
 
     return {

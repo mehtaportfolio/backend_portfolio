@@ -8,7 +8,7 @@
 
 import express from 'express';
 import authMiddleware from '../middleware/auth.js';
-import { cacheMiddleware } from '../middleware/cache.js';
+import cache, { cacheMiddleware } from '../middleware/cache.js';
 import {
   getOpenStockData,
   getClosedStockData,
@@ -104,6 +104,42 @@ router.get('/portfolio', authMiddleware, cacheMiddleware(5), async (req, res) =>
     res
       .status(500)
       .json({ error: error.message || 'Failed to fetch portfolio data' });
+  }
+});
+
+/**
+ * POST /api/stock/invalidate-cache
+ * Invalidate all stock-related cache
+ */
+router.post('/invalidate-cache', authMiddleware, (req, res) => {
+  try {
+    const allKeys = cache.stats().keys;
+    console.log('[Stock Cache] All cache keys before invalidation:', allKeys);
+    
+    const stockKeys = allKeys.filter(key => 
+      key.includes('/open:') || 
+      key.includes('/closed:') || 
+      key.includes('/etf:') || 
+      key.includes('/portfolio:')
+    );
+    
+    console.log(`[Stock Cache] Found ${stockKeys.length} stock keys to invalidate:`, stockKeys);
+    
+    stockKeys.forEach(key => {
+      console.log(`[Stock Cache] Deleting: ${key}`);
+      cache.delete(key);
+    });
+    
+    console.log(`[Stock Cache] ✅ Invalidated ${stockKeys.length} cache entries`);
+    
+    res.json({ 
+      success: true, 
+      message: `Cleared ${stockKeys.length} cache entries`,
+      clearedCount: stockKeys.length
+    });
+  } catch (error) {
+    console.error('[Stock Cache] Error invalidating cache:', error);
+    res.status(500).json({ error: error.message || 'Failed to invalidate cache' });
   }
 });
 
