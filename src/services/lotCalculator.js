@@ -77,12 +77,14 @@ export function calculateStockLots(transactions = [], cmpMap = new Map()) {
 
     const accountName = String(txn.account_name || '').trim();
     const accountType = String(txn.account_type || '').trim().toUpperCase();
+    const equityType = String(txn.equity_type || '').trim().toLowerCase();
     const stockName = String(txn.stock_name).trim();
 
-    const key = `${accountName}||${accountType}||${stockName}`;
+    const key = `${accountName}||${accountType}||${equityType}||${stockName}`;
     const entry = aggregated.get(key) || {
       accountName,
       accountType,
+      equityType,
       stockName,
       quantity: 0,
       invested: 0,
@@ -104,6 +106,7 @@ export function calculateStockLots(transactions = [], cmpMap = new Map()) {
     const holding = {
       stockName: entry.stockName,
       accountType: entry.accountType,
+      equityType: entry.equityType,
       accountName: String(entry.accountName || '').trim(),
       quantity: entry.quantity,
       invested: invested,
@@ -115,10 +118,16 @@ export function calculateStockLots(transactions = [], cmpMap = new Map()) {
 
     holdings.push(holding);
 
-    if (entry.accountType === 'ETF') {
+    const isETF = entry.equityType === 'etf' || 
+                  entry.accountType === 'ETF' || 
+                  ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => entry.stockName.toUpperCase().includes(p));
+    
+    const isStock = !isETF && (entry.equityType === 'stocks' || ['free', 'regular', 'esop'].includes(entry.accountType.toLowerCase()));
+
+    if (isETF) {
       etfMarketValue += marketValue;
       etfInvested += invested;
-    } else {
+    } else if (isStock) {
       stockMarketValue += marketValue;
       stockInvested += invested;
     }

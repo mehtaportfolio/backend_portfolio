@@ -216,7 +216,7 @@ export async function getAnalysisDashboard() {
       { data: npsTxns },
     ] = await Promise.all([
       fetchAllRows(supabase, 'stock_transactions', {
-        select: 'stock_name, quantity, buy_price, sell_date, account_name, account_type, buy_date',
+        select: 'stock_name, quantity, buy_price, sell_date, account_name, account_type, buy_date, equity_type',
       }),
       fetchAllRows(supabase, 'stock_master', {
         select: 'stock_name, cmp',
@@ -279,8 +279,20 @@ export async function getAnalysisDashboard() {
     });
 
     stockAccountMap.forEach((txns, accountName) => {
-            const stocks = txns.filter((t) => !t.sell_date && t.account_type !== 'ETF');
-      const etfs = txns.filter((t) => !t.sell_date && t.account_type === 'ETF');
+      const etfs = txns.filter((t) => {
+        if (t.sell_date) return false;
+        const isETF = (t.equity_type || '').toLowerCase() === 'etf' || 
+                      String(t.account_type || '').toUpperCase() === 'ETF' ||
+                      ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => String(t.stock_name || '').toUpperCase().includes(p));
+        return isETF;
+      });
+      const stocks = txns.filter((t) => {
+        if (t.sell_date) return false;
+        const isETF = (t.equity_type || '').toLowerCase() === 'etf' || 
+                      String(t.account_type || '').toUpperCase() === 'ETF' ||
+                      ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => String(t.stock_name || '').toUpperCase().includes(p));
+        return !isETF;
+      });
 
       const sumTotals = (list) => {
         return list.reduce(
@@ -452,6 +464,12 @@ export async function getAnalysisDashboard() {
     // Top stocks
     const stockData = new Map();
     (stockTxns || []).forEach((txn) => {
+      // Exclude ETFs from Top Stocks
+      const isETF = (txn.equity_type || '').toLowerCase() === 'etf' || 
+                    String(txn.account_type || '').toUpperCase() === 'ETF' ||
+                    ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => String(txn.stock_name || '').toUpperCase().includes(p));
+      if (isETF) return;
+
       const stockName = txn.stock_name;
       if (!stockData.has(stockName)) {
         stockData.set(stockName, []);
@@ -520,7 +538,7 @@ export async function getAnalysisSummary() {
       { data: fundMaster, error: fundMasterError },
     ] = await Promise.all([
       fetchAllRows(supabase, 'stock_transactions', {
-        select: 'stock_name, quantity, buy_price, buy_date, sell_date, sell_price, account_name, account_type',
+        select: 'stock_name, quantity, buy_price, buy_date, sell_date, sell_price, account_name, account_type, equity_type',
       }),
       fetchAllRows(supabase, 'stock_master', {
         select: 'stock_name, cmp, lcp, sector, category, industry, macro_sector, known_sector, basic_industry',
@@ -598,10 +616,13 @@ export async function getAnalysisSummary() {
         flows.push({ amount: marketValue, date: new Date().toISOString() });
       }
 
+      const equityType = txn.equity_type ? String(txn.equity_type).trim().toUpperCase() : 'STOCK';
+
       equityActive.push({
         stock_name: stockName,
         account_name: accountName,
         account_type: accountType,
+        equity_type: equityType,
         sector: masterInfo.sector || 'Unknown',
         category: masterInfo.category || 'Unknown',
         industry: masterInfo.industry || 'Unknown',
@@ -657,10 +678,13 @@ export async function getAnalysisSummary() {
         flows.push({ amount: netSaleValue, date: sellDate });
       }
 
+      const equityType = txn.equity_type ? String(txn.equity_type).trim().toUpperCase() : 'STOCK';
+
       equityClosed.push({
         stock_name: stockName,
         account_name: accountName,
         account_type: accountType,
+        equity_type: equityType,
         sector: masterInfo.sector || 'Unknown',
         category: masterInfo.category || 'Unknown',
         industry: masterInfo.industry || 'Unknown',

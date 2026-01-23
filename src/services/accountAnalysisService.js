@@ -132,10 +132,12 @@ export async function getAccountAnalysis(supabase, userId) {
 
   // Stocks & ETFs (open lots only from calculateStockLots)
   normalizeHoldings(stockLots.holdings).forEach((holding) => {
-    const isEtf = holding.accountType === 'ETF';
+    const isEtf = holding.equityType === 'etf' || 
+                  holding.accountType === 'ETF' || 
+                  ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => String(holding.stockName || '').toUpperCase().includes(p));
     const assetLabel = isEtf ? 'etf' : 'stocks';
 
-    const accountName = isEtf ? holding.accountName || holding.accountType : holding.accountName;
+    const accountName = holding.accountName;
 
     sumByAccount(
       accountsMap,

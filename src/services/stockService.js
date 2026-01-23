@@ -60,12 +60,23 @@ export async function getOpenStockData(supabase, userId) {
       supabase,
       'stock_transactions',
       {
-        select: 'id, stock_name, quantity, buy_price, buy_date, account_name, account_type',
+        select: 'id, stock_name, quantity, buy_price, buy_date, account_name, account_type, equity_type',
         filters: [
           (q) => q.is('sell_date', null),
-          (q) => q.in('account_type', ['Free', 'Regular']),
         ],
       }
+    );
+
+    console.log(`[Stock] Raw open transactions fetched: ${transactions?.length || 0}`);
+    if (transactions?.length > 0) {
+      console.log(`[Stock] Sample transaction equity_type: "${transactions[0].equity_type}", account_type: "${transactions[0].account_type}"`);
+      const stocksCount = transactions.filter(t => t.equity_type?.toLowerCase() === 'stocks').length;
+      const etfCount = transactions.filter(t => t.equity_type?.toLowerCase() === 'etf').length;
+      console.log(`[Stock] Counts - stocks: ${stocksCount}, etf: ${etfCount}`);
+    }
+
+    const filteredTransactions = (transactions || []).filter(t => 
+      t.equity_type?.toLowerCase() === 'stocks' && ['free', 'regular'].includes(t.account_type?.toLowerCase())
     );
 
     if (txnError) throw txnError;
@@ -97,7 +108,7 @@ export async function getOpenStockData(supabase, userId) {
 
     // Group by stock name
     const grouped = {};
-    (transactions || []).forEach((txn) => {
+    (filteredTransactions || []).forEach((txn) => {
       const stockName = String(txn.stock_name).trim();
       if (!grouped[stockName]) {
         grouped[stockName] = {
@@ -231,8 +242,10 @@ export async function getClosedStockData(supabase, userId) {
       'stock_transactions',
       {
         select:
-          'id, stock_name, quantity, buy_price, buy_date, sell_date, sell_price, account_name, account_type',
-        filters: [(q) => q.not('sell_date', 'is', null)],
+          'id, stock_name, quantity, buy_price, buy_date, sell_date, sell_price, account_name, account_type, equity_type',
+        filters: [
+          (q) => q.not('sell_date', 'is', null)
+        ],
       }
     );
 
@@ -345,10 +358,14 @@ export async function getETFData(supabase, userId) {
       'stock_transactions',
       {
         select:
-          'id, stock_name, quantity, buy_price, buy_date, sell_date, sell_price, account_name, account_type',
-        filters: [(q) => q.ilike('account_type', 'etf')],
+          'id, stock_name, quantity, buy_price, buy_date, sell_date, sell_price, account_name, account_type, equity_type',
       }
     );
+
+    console.log(`[Stock] Raw ETF-related transactions fetched: ${transactions?.length || 0}`);
+    
+    const etfTransactions = (transactions || []).filter(t => t.equity_type?.toLowerCase() === 'etf');
+    console.log(`[Stock] Filtered ETF transactions: ${etfTransactions.length}`);
 
     if (txnError) throw txnError;
 
@@ -374,7 +391,7 @@ export async function getETFData(supabase, userId) {
 
     // Group by stock name
     const grouped = {};
-    (transactions || []).forEach((txn) => {
+    (etfTransactions || []).forEach((txn) => {
       const stockName = String(txn.stock_name).trim();
       if (!grouped[stockName]) {
         grouped[stockName] = {
@@ -493,7 +510,7 @@ export async function getPortfolioData(supabase, userId) {
     ] = await Promise.all([
       fetchAllRows(supabase, 'stock_transactions', {
         select:
-          'id, stock_name, quantity, buy_price, buy_date, sell_date, sell_price, account_name, account_type',
+          'id, stock_name, quantity, buy_price, buy_date, sell_date, sell_price, account_name, account_type, equity_type',
       }),
       fetchAllRows(supabase, 'stock_master', {
         select: 'stock_name, cmp, lcp, category, sector',

@@ -120,7 +120,7 @@ export async function fetchUserAllData(supabase, userId) {
 
   const queries = {
     stock_transactions: {
-      select: 'stock_name, quantity, buy_price, sell_date, account_type, buy_date, account_name',
+      select: 'stock_name, quantity, buy_price, sell_date, account_type, buy_date, account_name, equity_type',
     },
     stock_master: {
       select: 'stock_name, cmp, lcp',

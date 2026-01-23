@@ -88,9 +88,16 @@ export async function getDashboardAssetAllocation(supabase, userId) {
       stockData.holdings.forEach((holding) => {
         const lcp = stockLcpMap.get(holding.stockName) || 0;
         const dayChange = holding.quantity * (holding.cmp - lcp);
-        if (holding.accountType === 'ETF') {
+        
+        const isETF = (holding.equityType || '').toLowerCase() === 'etf' || 
+                      holding.accountType === 'ETF' || 
+                      ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => String(holding.stockName || '').toUpperCase().includes(p));
+        
+        const isStock = !isETF && ((holding.equityType || '').toLowerCase() === 'stocks' || ['free', 'regular', 'esop'].includes((holding.accountType || '').toLowerCase()));
+        
+        if (isETF) {
           etfDayChange += dayChange;
-        } else {
+        } else if (isStock) {
           stockDayChange += dayChange;
         }
       });
