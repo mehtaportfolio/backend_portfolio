@@ -684,4 +684,26 @@ export async function getPortfolioData(supabase, userId) {
     console.error('[Stock] Error fetching portfolio data:', error);
     throw error;
   }
-}
+}  
+/**  
+ * Bulk update account type for a stock  
+ */  
+export async function bulkUpdateAccountType(supabase, userId, stockName, newAccountType) {  
+  console.log(`[Stock] Bulk updating account type to \"${newAccountType}\" for stock \"${stockName}\" and user: ${userId}`);  
+  
+  try {  
+    const { data, error } = await supabase  
+      .from('stock_transactions')  
+      .update({ account_type: newAccountType })  
+      .eq('stock_name', stockName);  
+  
+    if (error) {  
+      throw error;  
+    }  
+  
+    return { success: true };  
+  } catch (error) {  
+    console.error('[Stock] Error in bulkUpdateAccountType:', error);  
+    throw error;  
+  }  
+} 

@@ -14,6 +14,7 @@ import {
   getClosedStockData,
   getETFData,
   getPortfolioData,
+  bulkUpdateAccountType,
 } from '../services/stockService.js';
 import { supabase } from '../db/supabaseClient.js';
 
@@ -140,6 +141,43 @@ router.post('/invalidate-cache', authMiddleware, (req, res) => {
   } catch (error) {
     console.error('[Stock Cache] Error invalidating cache:', error);
     res.status(500).json({ error: error.message || 'Failed to invalidate cache' });
+  }
+});
+
+/**
+ * POST /api/stock/bulk-update-account
+ * Bulk update account type for a stock
+ */
+router.post('/bulk-update-account', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const { stockName, accountType } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (!stockName || !accountType) {
+      return res.status(400).json({ error: 'Stock name and account type are required' });
+    }
+
+    const result = await bulkUpdateAccountType(supabase, userId, stockName, accountType);
+    
+    // Invalidate cache after update
+    const allKeys = cache.stats().keys;
+    const stockKeys = allKeys.filter(key => 
+      key.includes('/open:') || 
+      key.includes('/closed:') || 
+      key.includes('/etf:') || 
+      key.includes('/portfolio:') ||
+      key.includes('/free-stocks:')
+    );
+    stockKeys.forEach(key => cache.delete(key));
+
+    res.json(result);
+  } catch (error) {
+    console.error('[Stock API] Error in bulk update:', error);
+    res.status(500).json({ error: error.message || 'Failed to bulk update account type' });
   }
 });
 
