@@ -1,6 +1,6 @@
 import webpush from 'web-push';
 import { supabase } from '../db/supabaseClient.js';
-import { getAnalysisSummary } from './analysisService.js';
+import { getDashboardAssetAllocation } from './dashboardService.js';
 
 // Initialize web-push with VAPID keys
 const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
@@ -88,46 +88,18 @@ export async function triggerPortfolioUpdate(force = false) {
   }
 
   try {
-    const summary = await getAnalysisSummary();
-    
-    // Calculate Summary Data
-    let totalMarketValue = 0;
-    let totalInvested = 0;
-    let totalDayChange = 0;
+    // For now, use hardcoded user ID - in production, extract from JWT
+    const userId = 'test-user';
+    const result = await getDashboardAssetAllocation(supabase, userId);
+    const { totalProfit, profitPercent, overallDayChange, totalMarketValue } = result.summary;
 
-    // Equity Active
-    summary.equityActive.forEach(item => {
-      // Filter for Equity Button logic: STOCK and ETF only, exclude BDM
-      const accountName = (item.account_name || '').toUpperCase();
-      const equityType = (item.equity_type || '').toUpperCase();
-      
-      if (accountName !== 'BDM' && (equityType === 'STOCK' || equityType === 'ETF')) {
-        totalMarketValue += toNumber(item.market_value);
-        totalInvested += toNumber(item.invested_amount);
-        totalDayChange += toNumber(item.day_change);
-      }
-    });
-
-    // Mutual Funds are handled in a separate section on the UI, 
-    // but if the user wants "Equity Button" logic, we should check if they want MF included.
-    // Given the previous error report, I will focus only on Equity (Stock/ETF) for now.
-    /*
-    summary.mfActive.forEach(item => {
-      totalMarketValue += toNumber(item.marketValue);
-      totalInvested += toNumber(item.investedValue);
-      totalDayChange += toNumber(item.dayChange);
-    });
-    */
-
-    const totalProfit = totalMarketValue - totalInvested;
-    const profitPercent = totalInvested > 0 ? (totalProfit / totalInvested) * 100 : 0;
-    const dayChangePercent = (totalMarketValue - totalDayChange) > 0 
-      ? (totalDayChange / (totalMarketValue - totalDayChange)) * 100 
+    const dayChangePercent = (totalMarketValue - overallDayChange) > 0 
+      ? (overallDayChange / (totalMarketValue - overallDayChange)) * 100 
       : 0;
 
     const payload = {
       title: 'Portfolio Update',
-      body: `Profit: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(2)}%)\nDay: ₹${totalDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(2)}%)`,
+      body: `Profit: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(2)}%)\nDay: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(2)}%)`,
       icon: '/mainphoto.png',
       badge: '/logo192.png',
       data: {
