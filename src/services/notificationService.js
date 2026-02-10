@@ -88,11 +88,20 @@ export async function triggerPortfolioUpdate(force = false) {
   }
 
   try {
-    // For now, use hardcoded user ID - in production, extract from JWT
-    const userId = 'test-user';
-    const result = await getDashboardAssetAllocation(supabase, userId);
-    const { totalProfit, profitPercent, overallDayChange, totalMarketValue } = result.summary;
-
+    // We target the primary user accounts. PDM and PSM seem to be part of your portfolio too.
+    // BDM is excluded as requested.
+    const userIds = ['PM', 'PDM', 'PSM'];
+    const result = await getDashboardAssetAllocation(supabase, userIds);
+    
+    // The user specifically wants Stock + ETF (Equity Button logic)
+    const equityRows = result.rows.filter(r => r.assetType === 'Stock' || r.assetType === 'ETF');
+    
+    const totalMarketValue = equityRows.reduce((sum, r) => sum + r.marketValue, 0);
+    const totalInvested = equityRows.reduce((sum, r) => sum + r.investedValue, 0);
+    const totalProfit = totalMarketValue - totalInvested;
+    const profitPercent = totalInvested > 0 ? (totalProfit / totalInvested) * 100 : 0;
+    
+    const overallDayChange = equityRows.reduce((sum, r) => sum + r.dayChange, 0);
     const dayChangePercent = (totalMarketValue - overallDayChange) > 0 
       ? (overallDayChange / (totalMarketValue - overallDayChange)) * 100 
       : 0;
