@@ -97,17 +97,27 @@ export async function triggerPortfolioUpdate(force = false) {
 
     // Equity Active
     summary.equityActive.forEach(item => {
-      totalMarketValue += toNumber(item.market_value);
-      totalInvested += toNumber(item.invested_amount);
-      totalDayChange += toNumber(item.day_change);
+      // Filter for Equity Button logic: STOCK and ETF only, exclude BDM
+      const accountName = (item.account_name || '').toUpperCase();
+      const equityType = (item.equity_type || '').toUpperCase();
+      
+      if (accountName !== 'BDM' && (equityType === 'STOCK' || equityType === 'ETF')) {
+        totalMarketValue += toNumber(item.market_value);
+        totalInvested += toNumber(item.invested_amount);
+        totalDayChange += toNumber(item.day_change);
+      }
     });
 
-    // Mutual Funds Active
+    // Mutual Funds are handled in a separate section on the UI, 
+    // but if the user wants "Equity Button" logic, we should check if they want MF included.
+    // Given the previous error report, I will focus only on Equity (Stock/ETF) for now.
+    /*
     summary.mfActive.forEach(item => {
       totalMarketValue += toNumber(item.marketValue);
       totalInvested += toNumber(item.investedValue);
       totalDayChange += toNumber(item.dayChange);
     });
+    */
 
     const totalProfit = totalMarketValue - totalInvested;
     const profitPercent = totalInvested > 0 ? (totalProfit / totalInvested) * 100 : 0;
