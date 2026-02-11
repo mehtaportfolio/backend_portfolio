@@ -12,7 +12,8 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANO
 // Analysis Dashboard - Account-wise stocks, top gainers/losers
 router.get('/dashboard', async (req, res, next) => {
   try {
-    const data = await getAnalysisDashboard();
+    const userId = req.userId || req.query.userId || ['PM', 'PDM', 'PSM'];
+    const data = await getAnalysisDashboard(userId);
     res.json(data);
   } catch (error) {
     next(error);
@@ -21,7 +22,7 @@ router.get('/dashboard', async (req, res, next) => {
 
 router.get('/account-dashboard', cacheMiddleware(ANALYSIS_CACHE_TTL), async (req, res, next) => {
   try {
-    const userId = req.userId || req.query.userId || 'test-user';
+    const userId = req.userId || req.query.userId || ['PM', 'PDM', 'PSM'];
     const data = await getAccountAnalysis(supabase, userId);
     res.json({
       success: true,
@@ -36,7 +37,8 @@ router.get('/account-dashboard', cacheMiddleware(ANALYSIS_CACHE_TTL), async (req
 // Analysis Summary - Active/Closed equity and MF positions
 router.get('/summary', async (req, res, next) => {
   try {
-    const data = await getAnalysisSummary();
+    const userId = req.userId || req.query.userId || ['PM', 'PDM', 'PSM'];
+    const data = await getAnalysisSummary(userId);
     res.json(data);
   } catch (error) {
     next(error);
@@ -46,7 +48,8 @@ router.get('/summary', async (req, res, next) => {
 // Free Stocks Analysis
 router.get('/free-stocks', async (req, res, next) => {
   try {
-    const data = await getAnalysisFreeStocks();
+    const userId = req.userId || req.query.userId || ['PM', 'PDM', 'PSM'];
+    const data = await getAnalysisFreeStocks(userId);
     res.json(data);
   } catch (error) {
     next(error);

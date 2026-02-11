@@ -204,7 +204,7 @@ const calculateXirr = (flows) => {
   return mid * 100;
 };
 
-export async function getAnalysisDashboard() {
+export async function getAnalysisDashboard(userId = 'all') {
   try {
     const [
       { data: stockTxns },
@@ -217,6 +217,7 @@ export async function getAnalysisDashboard() {
     ] = await Promise.all([
       fetchAllRows(supabase, 'stock_transactions', {
         select: 'stock_name, quantity, buy_price, sell_date, account_name, account_type, buy_date, equity_type',
+        filters: userId !== 'all' ? [(q) => q.in('account_name', Array.isArray(userId) ? userId : [userId])] : []
       }),
       fetchAllRows(supabase, 'stock_master', {
         select: 'stock_name, cmp',
@@ -224,18 +225,21 @@ export async function getAnalysisDashboard() {
       fetchAllRows(supabase, 'mf_transactions', {
         select: 'fund_short_name, account_name, transaction_type, date, units, nav',
         chunkSize: 2000,
+        filters: userId !== 'all' ? [(q) => q.in('account_name', Array.isArray(userId) ? userId : [userId])] : []
       }),
       fetchAllRows(supabase, 'fund_master', {
         select: 'fund_short_name, cmp',
       }),
       fetchAllRows(supabase, 'ppf_transactions', {
         select: 'account_name, amount, transaction_type',
+        filters: userId !== 'all' ? [(q) => q.in('account_name', Array.isArray(userId) ? userId : [userId])] : []
       }),
       fetchAllRows(supabase, 'epf_transactions', {
         select: 'employee_share, employer_share, pension_share',
       }),
       fetchAllRows(supabase, 'nps_transactions', {
         select: 'account_name, units, nav, transaction_type',
+        filters: userId !== 'all' ? [(q) => q.in('account_name', Array.isArray(userId) ? userId : [userId])] : []
       }),
     ]);
 
@@ -529,7 +533,7 @@ export async function getAnalysisDashboard() {
   }
 }
 
-export async function getAnalysisSummary() {
+export async function getAnalysisSummary(userId = 'all') {
   try {
     const [
       { data: stockTxns, error: stockError },
@@ -539,6 +543,7 @@ export async function getAnalysisSummary() {
     ] = await Promise.all([
       fetchAllRows(supabase, 'stock_transactions', {
         select: 'stock_name, quantity, buy_price, buy_date, sell_date, sell_price, account_name, account_type, equity_type',
+        filters: userId !== 'all' ? [(q) => q.in('account_name', Array.isArray(userId) ? userId : [userId])] : []
       }),
       fetchAllRows(supabase, 'stock_master', {
         select: 'stock_name, cmp, lcp, sector, category, industry, macro_sector, known_sector, basic_industry',
@@ -546,6 +551,7 @@ export async function getAnalysisSummary() {
       fetchAllRows(supabase, 'mf_transactions', {
         select: 'fund_short_name, account_name, transaction_type, date, units, nav',
         chunkSize: 2000,
+        filters: userId !== 'all' ? [(q) => q.in('account_name', Array.isArray(userId) ? userId : [userId])] : []
       }),
       fetchAllRows(supabase, 'fund_master', {
         select: 'fund_short_name, cmp, lcp, category, amc_name',
@@ -1056,11 +1062,12 @@ const normalizeAccountTypeForFreeStocks = (accountType, accountName) => {
   return normalizedType || 'REGULAR';
 };
 
-export async function getAnalysisFreeStocks() {
+export async function getAnalysisFreeStocks(userId = 'all') {
   try {
     let [{ data: stockTxns }, { data: stockMaster }] = await Promise.all([
       fetchAllRows(supabase, 'stock_transactions', {
         select: 'stock_name, quantity, buy_price, sell_date, account_name, account_type, buy_date',
+        filters: userId !== 'all' ? [(q) => q.in('account_name', Array.isArray(userId) ? userId : [userId])] : []
       }),
       fetchAllRows(supabase, 'stock_master', {
         select: 'stock_name, cmp',

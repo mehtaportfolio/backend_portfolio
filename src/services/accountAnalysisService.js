@@ -59,6 +59,11 @@ const normalizeHoldings = (holdings = []) => {
 
 const sumByAccount = (accumulator, accountName, assetType, invested, marketValue) => {
   const normalizedAccount = formatAccountName(accountName);
+  // Exclude BDM accounts
+  if (normalizedAccount.toUpperCase() === 'BDM') {
+    return;
+  }
+  
   if (!accumulator.has(normalizedAccount)) {
     accumulator.set(normalizedAccount, {
       account_name: normalizedAccount,
