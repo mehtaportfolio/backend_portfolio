@@ -227,6 +227,7 @@ export async function getDashboardAssetAllocation(supabase, userId) {
         ...summary,
         overallDayChange
       },
+      stockHoldings: stockData.holdings,
       bankSavings: bankData.savings,
       bankDemat: bankData.demat,
       timestamp: new Date().toISOString(),

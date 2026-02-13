@@ -106,9 +106,23 @@ export async function triggerPortfolioUpdate(force = false) {
       ? (overallDayChange / (totalMarketValue - overallDayChange)) * 100 
       : 0;
 
+    // Filter for regular stocks with > 140% profit
+    const highProfitRegularStocks = (result.stockHoldings || [])
+      .filter(h => h.accountType === 'REGULAR' && h.profitPercent > 140)
+      .sort((a, b) => b.profitPercent - a.profitPercent);
+
+    let notificationBody = `Profit: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(2)}%)\nDay: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(2)}%)`;
+
+    if (highProfitRegularStocks.length > 0) {
+      notificationBody += '\n\nHigh Profit Stocks:';
+      highProfitRegularStocks.forEach(s => {
+        notificationBody += `\n• ${s.stockName}: ${s.profitPercent.toFixed(0)}%`;
+      });
+    }
+
     const payload = {
       title: 'Portfolio Update',
-      body: `Profit: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(2)}%)\nDay: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(2)}%)`,
+      body: notificationBody,
       icon: '/mainphoto.png',
       badge: '/logo192.png',
       data: {
