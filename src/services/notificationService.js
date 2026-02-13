@@ -106,10 +106,33 @@ export async function triggerPortfolioUpdate(force = false) {
       ? (overallDayChange / (totalMarketValue - overallDayChange)) * 100 
       : 0;
 
-    // Filter for regular stocks with > 140% profit
-    const highProfitRegularStocks = (result.stockHoldings || [])
-      .filter(h => h.accountType === 'REGULAR' && h.profitPercent > 140)
-      .sort((a, b) => b.profitPercent - a.profitPercent);
+    // Aggregate regular stocks by name to check combined profit threshold
+    const regularStocksMap = new Map();
+    (result.stockHoldings || []).forEach(h => {
+      if (h.accountType === 'REGULAR') {
+        const existing = regularStocksMap.get(h.stockName) || { invested: 0, marketValue: 0 };
+        regularStocksMap.set(h.stockName, {
+          invested: existing.invested + h.invested,
+          marketValue: existing.marketValue + h.marketValue
+        });
+      }
+    });
+
+    const highProfitRegularStocks = [];
+    regularStocksMap.forEach((values, stockName) => {
+      const combinedProfitPercent = values.invested > 0 
+        ? ((values.marketValue - values.invested) / values.invested) * 100 
+        : 0;
+      
+      if (combinedProfitPercent > 140) {
+        highProfitRegularStocks.push({
+          stockName,
+          profitPercent: combinedProfitPercent
+        });
+      }
+    });
+
+    highProfitRegularStocks.sort((a, b) => b.profitPercent - a.profitPercent);
 
     let notificationBody = `Profit: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(2)}%)\nDay: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(2)}%)`;
 
