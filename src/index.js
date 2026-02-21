@@ -98,7 +98,10 @@ app.get('/refresh-stocks', async (req, res) => {
   try {
     console.log('🔄 Calling Angel One refresh-stocks endpoint...');
     const response = await axios.get('https://mehta-ao-prices.onrender.com/refresh-stocks', {
-      timeout: 30000
+      timeout: 60000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
     });
     
     console.log('✅ Angel One refresh-stocks response:', response.data);
@@ -109,7 +112,8 @@ app.get('/refresh-stocks', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error calling Angel One refresh-stocks:', error.message);
-    res.status(500).json({
+    console.error('Error details:', error.response?.status, error.response?.data);
+    res.status(error.response?.status || 500).json({
       status: 'error',
       message: error.message || 'Failed to refresh Angel One stock list',
       error: error.response?.data || error.message
@@ -121,7 +125,10 @@ app.post('/sync-cmp', async (req, res) => {
   try {
     console.log('🔄 Triggering CMP sync...');
     const response = await axios.get('https://mehta-ao-prices.onrender.com/sync-cmp', {
-      timeout: 30000
+      timeout: 60000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
     });
     
     console.log('✅ CMP sync response:', response.data);
@@ -132,7 +139,8 @@ app.post('/sync-cmp', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error calling CMP sync:', error.message);
-    res.status(500).json({
+    console.error('Error details:', error.response?.status, error.response?.data);
+    res.status(error.response?.status || 500).json({
       status: 'error',
       message: error.message || 'Failed to trigger CMP sync',
       error: error.response?.data || error.message
@@ -144,7 +152,10 @@ app.post('/sync-lcp', async (req, res) => {
   try {
     console.log('🔄 Triggering LCP sync...');
     const response = await axios.get('https://mehta-ao-prices.onrender.com/sync-lcp', {
-      timeout: 30000
+      timeout: 60000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
     });
     
     console.log('✅ LCP sync response:', response.data);
@@ -155,7 +166,8 @@ app.post('/sync-lcp', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error calling LCP sync:', error.message);
-    res.status(500).json({
+    console.error('Error details:', error.response?.status, error.response?.data);
+    res.status(error.response?.status || 500).json({
       status: 'error',
       message: error.message || 'Failed to trigger LCP sync',
       error: error.response?.data || error.message
