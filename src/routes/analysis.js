@@ -15,8 +15,6 @@ router.get('/dashboard', cacheMiddleware(ANALYSIS_CACHE_TTL), async (req, res, n
     const userId = req.userId || req.query.userId || ['PM', 'PDM', 'PSM', 'BDM'];
     const priceSource = req.query.priceSource || 'stock_master';
     
-    console.log(`[Analysis Route] Dashboard requested with priceSource: "${priceSource}"`);
-    
     const data = await getAnalysisDashboard(userId, priceSource);
     res.json(data);
   } catch (error) {

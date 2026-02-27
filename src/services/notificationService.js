@@ -52,7 +52,6 @@ export async function sendPushNotification(payload) {
 
     if (error) throw error;
     if (!subscriptions || subscriptions.length === 0) {
-      console.log('No push subscriptions found.');
       return;
     }
 
@@ -63,7 +62,6 @@ export async function sendPushNotification(payload) {
         .catch(err => {
           if (err.statusCode === 410 || err.statusCode === 404) {
             // Subscription expired or no longer valid
-            console.log('Push subscription expired, removing...');
             return supabase.from('push_subscriptions').delete().match({ subscription: sub.subscription });
           }
           console.error('Error sending push notification:', err);
@@ -71,7 +69,6 @@ export async function sendPushNotification(payload) {
     );
 
     await Promise.all(sendPromises);
-    console.log(`Push notifications sent to ${subscriptions.length} devices.`);
   } catch (err) {
     console.error('Error in sendPushNotification:', err);
   }
@@ -83,7 +80,6 @@ export async function sendPushNotification(payload) {
  */
 export async function triggerPortfolioUpdate(force = false) {
   if (!force && !isMarketHours()) {
-    console.log('Outside market hours. Skipping notification.');
     return { status: 'skipped', reason: 'outside_market_hours' };
   }
 

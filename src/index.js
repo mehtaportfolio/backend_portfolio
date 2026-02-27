@@ -7,9 +7,6 @@ import { dirname, join } from 'path';
 const envPath = join(dirname(fileURLToPath(import.meta.url)), '..', '.env.backend');
 dotenv.config({ path: envPath, override: false });
 
-// Debug check – ensure .env loaded
-console.log('✅ Loaded SUPABASE_URL:', process.env.SUPABASE_URL || '❌ Missing');
-
 // -------------------------------------------------------------
 // Import core dependencies (safe to import now)
 import express from 'express';
@@ -47,12 +44,6 @@ app.use(
 
 app.use(express.json());
 
-// Logging middleware
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-  next();
-});
-
 // -------------------------------------------------------------
 // Root routes for Render keep-alive and restart simulation
 app.get('/', (req, res) => {
@@ -61,7 +52,6 @@ app.get('/', (req, res) => {
 
 app.post('/', (req, res) => {
   // Simulate restart request (Render free tier doesn't support API restarts)
-  console.log('Restart request received');
   res.status(202).json({ message: 'Service is already running' });
 });
 
@@ -99,7 +89,6 @@ app.use('/api/notifications', notificationRoutes);
 app.post('/api/angel-one-status', async (req, res, next) => {
   try {
     const { success, message, timestamp, authenticated } = req.body;
-    console.log(`[Status Received] Success: ${success}, Message: ${message}`);
     
     await sendAngelOneStatusNotification({ success, message, timestamp, authenticated });
     
@@ -112,7 +101,6 @@ app.post('/api/angel-one-status', async (req, res, next) => {
 // 🔹 Proxy endpoints for Angel One services
 app.get('/refresh-stocks', async (req, res) => {
   try {
-    console.log('🔄 Calling Angel One refresh-stocks endpoint...');
     const response = await axios.get('https://mehta-ao-prices.onrender.com/refresh-stocks', {
       timeout: 60000,
       headers: {
@@ -120,7 +108,6 @@ app.get('/refresh-stocks', async (req, res) => {
       }
     });
     
-    console.log('✅ Angel One refresh-stocks response:', response.data);
     res.json({
       status: 'success',
       message: response.data?.message || 'Angel One stock list refreshed successfully',
@@ -139,7 +126,6 @@ app.get('/refresh-stocks', async (req, res) => {
 
 app.post('/sync-cmp', async (req, res) => {
   try {
-    console.log('🔄 Triggering CMP sync...');
     const response = await axios.get('https://mehta-ao-prices.onrender.com/sync-cmp', {
       timeout: 60000,
       headers: {
@@ -147,7 +133,6 @@ app.post('/sync-cmp', async (req, res) => {
       }
     });
     
-    console.log('✅ CMP sync response:', response.data);
     res.json({
       status: 'success',
       message: response.data?.message || 'CMP sync triggered successfully',
@@ -166,7 +151,6 @@ app.post('/sync-cmp', async (req, res) => {
 
 app.post('/sync-lcp', async (req, res) => {
   try {
-    console.log('🔄 Triggering LCP sync...');
     const response = await axios.get('https://mehta-ao-prices.onrender.com/sync-lcp', {
       timeout: 60000,
       headers: {
@@ -174,7 +158,6 @@ app.post('/sync-lcp', async (req, res) => {
       }
     });
     
-    console.log('✅ LCP sync response:', response.data);
     res.json({
       status: 'success',
       message: response.data?.message || 'LCP sync triggered successfully',
@@ -197,7 +180,6 @@ app.use(errorHandler);
 
 // Initialize stock_mapping table on startup
 try {
-  console.log('\n[Startup] Initializing stock_mapping table...');
   await initializeStockMapping();
 } catch (err) {
   console.error('[Startup] Error during initialization:', err);
@@ -206,20 +188,5 @@ try {
 // -------------------------------------------------------------
 // Start the server
 app.listen(PORT, () => {
-  console.log(`\n✅ Portfolio Tracker Backend running on http://localhost:${PORT}`);
-  console.log(`📊 Dashboard API: http://localhost:${PORT}/api/dashboard/asset-allocation`);
-  console.log(`📈 Analysis Dashboard: http://localhost:${PORT}/api/analysis/dashboard`);
-  console.log(`📋 Analysis Summary: http://localhost:${PORT}/api/analysis/summary`);
-  console.log(`📊 Free Stocks: http://localhost:${PORT}/api/analysis/free-stocks`);
-  console.log(`📈 Stock - Open Holdings: http://localhost:${PORT}/api/stock/open`);
-  console.log(`📈 Stock - Closed Holdings: http://localhost:${PORT}/api/stock/closed`);
-  console.log(`📈 Stock - ETF: http://localhost:${PORT}/api/stock/etf`);
-  console.log(`📈 Stock - Portfolio: http://localhost:${PORT}/api/stock/portfolio`);
-  console.log(`🏦 Assets - Bank: http://localhost:${PORT}/api/assets/bank`);
-  console.log(`🏦 Assets - NPS: http://localhost:${PORT}/api/assets/nps`);
-  console.log(`🏦 Assets - BDM: http://localhost:${PORT}/api/assets/bdm`);
-  console.log(`🏦 Assets - EPF: http://localhost:${PORT}/api/assets/epf`);
-  console.log(`🏦 Assets - PPF: http://localhost:${PORT}/api/assets/ppf`);
-  console.log(`💰 Assets - MF: http://localhost:${PORT}/api/assets/mf`);
-  console.log(`🏥 Health check: http://localhost:${PORT}/health\n`);
+console.log(`🚀 Server running on port ${PORT}`);
 });

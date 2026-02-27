@@ -207,7 +207,6 @@ const calculateXirr = (flows) => {
 export async function getAnalysisDashboard(userId = 'all', priceSource = 'stock_master') {
   try {
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
-    console.log(`[Analysis] getAnalysisDashboard using priceSource: "${priceSource}", table: "${priceTable}"`);
     
     const fetchPromises = [
       fetchAllRows(supabase, 'stock_transactions', {
@@ -564,7 +563,6 @@ export async function getAnalysisDashboard(userId = 'all', priceSource = 'stock_
 export async function getAnalysisSummary(userId = 'all', priceSource = 'stock_master') {
   try {
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
-    console.log(`[Analysis] getAnalysisSummary using priceSource: "${priceSource}", table: "${priceTable}"`);
     
     const fetchPromises = [
       fetchAllRows(supabase, 'stock_transactions', {
@@ -1134,7 +1132,6 @@ const normalizeAccountTypeForFreeStocks = (accountType, accountName) => {
 export async function getAnalysisFreeStocks(userId = 'all', priceSource = 'stock_master') {
   try {
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
-    console.log(`[Analysis] getAnalysisFreeStocks using priceSource: "${priceSource}", table: "${priceTable}"`);
     
     const fetchPromises = [
       fetchAllRows(supabase, 'stock_transactions', {

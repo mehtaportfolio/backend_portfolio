@@ -28,11 +28,9 @@ class CacheStore {
     const timer = setTimeout(() => {
       this.store.delete(key);
       this.timers.delete(key);
-      console.log(`[Cache] Expired: ${key}`);
     }, ttlMinutes * 60 * 1000);
 
     this.timers.set(key, timer);
-    console.log(`[Cache] Set: ${key} (TTL: ${ttlMinutes}m)`);
   }
 
   /**
@@ -43,10 +41,8 @@ class CacheStore {
   get(key) {
     const value = this.store.get(key);
     if (value) {
-      console.log(`[Cache] Hit: ${key}`);
       return value;
     }
-    console.log(`[Cache] Miss: ${key}`);
     return null;
   }
 
@@ -69,7 +65,6 @@ class CacheStore {
       this.timers.delete(key);
     }
     this.store.delete(key);
-    console.log(`[Cache] Deleted: ${key}`);
   }
 
   /**
@@ -79,7 +74,6 @@ class CacheStore {
     this.timers.forEach((timer) => clearTimeout(timer));
     this.store.clear();
     this.timers.clear();
-    console.log(`[Cache] Cleared all`);
   }
 
   /**

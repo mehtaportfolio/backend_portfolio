@@ -35,8 +35,6 @@ router.get(
       const userId = req.userId || req.query.userId || ['PM', 'PDM', 'PSM', 'BDM'];
       const priceSource = req.query.priceSource || 'stock_master';
 
-      console.log(`[Dashboard Route] Fetching with priceSource: "${priceSource}"`);
-
       const result = await getDashboardAssetAllocation(supabase, userId, priceSource);
 
       res.json({

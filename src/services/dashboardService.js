@@ -34,8 +34,6 @@ export function buildCMPMaps(data) {
 
   // Use stock_mapping if available (Angel One), otherwise fall back to stock_master
   const stockData = data.stock_mapping?.data || data.stock_master?.data || [];
-  const priceSource = data.stock_mapping?.data ? 'stock_mapping' : 'stock_master';
-  console.log(`[buildCMPMaps] Using stock price data from: "${priceSource}"`);
 
   (stockData).forEach((m) => {
     stockCmpMap.set(String(m.stock_name).trim(), toNumber(m.cmp));
@@ -65,7 +63,6 @@ export function buildCMPMaps(data) {
 export async function getDashboardAssetAllocation(supabase, userId, priceSource = 'stock_master') {
 
   try {
-    console.log(`[Dashboard] Computing asset allocation with priceSource: "${priceSource}"`);
     // Fetch all user data in parallel
     const data = await fetchUserAllData(supabase, userId, priceSource);
 

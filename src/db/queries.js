@@ -121,7 +121,6 @@ export async function fetchUserAllData(supabase, userId, priceSource = 'stock_ma
 
   // Determine price table based on priceSource
   const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
-  console.log(`[fetchUserAllData] Using price table: "${priceTable}" (priceSource: "${priceSource}")`);
 
   // Support array of userIds
   const userIdArray = Array.isArray(userId) ? userId : [userId];

@@ -123,7 +123,6 @@ router.get('/portfolio', authMiddleware, cacheMiddleware(5), async (req, res) =>
 router.post('/invalidate-cache', authMiddleware, (req, res) => {
   try {
     const allKeys = cache.stats().keys;
-    console.log('[Stock Cache] All cache keys before invalidation:', allKeys);
     
     const stockKeys = allKeys.filter(key => 
       key.includes('/open:') || 
@@ -132,14 +131,9 @@ router.post('/invalidate-cache', authMiddleware, (req, res) => {
       key.includes('/portfolio:')
     );
     
-    console.log(`[Stock Cache] Found ${stockKeys.length} stock keys to invalidate:`, stockKeys);
-    
     stockKeys.forEach(key => {
-      console.log(`[Stock Cache] Deleting: ${key}`);
       cache.delete(key);
     });
-    
-    console.log(`[Stock Cache] ✅ Invalidated ${stockKeys.length} cache entries`);
     
     res.json({ 
       success: true, 

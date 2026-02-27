@@ -59,8 +59,6 @@ function normalizeStockName(name) {
  * Get open stock holdings grouped by stock name
  */
 export async function getOpenStockData(supabase, userId, priceSource = 'stock_master') {
-  console.log(`[Stock] ⚡ FETCHING open stock holdings for user: ${userId}, priceSource: "${priceSource}"`);
-
   try {
     // Fetch open transactions for Free/Regular accounts
     const { data: transactions, error: txnError } = await fetchAllRows(
@@ -74,14 +72,6 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
       }
     );
 
-    console.log(`[Stock] Raw open transactions fetched: ${transactions?.length || 0}`);
-    if (transactions?.length > 0) {
-      console.log(`[Stock] Sample transaction equity_type: "${transactions[0].equity_type}", account_type: "${transactions[0].account_type}"`);
-      const stocksCount = transactions.filter(t => t.equity_type?.toLowerCase() === 'stocks').length;
-      const etfCount = transactions.filter(t => t.equity_type?.toLowerCase() === 'etf').length;
-      console.log(`[Stock] Counts - stocks: ${stocksCount}, etf: ${etfCount}`);
-    }
-
     const filteredTransactions = (transactions || []).filter(t => 
       t.equity_type?.toLowerCase() === 'stocks' && ['free', 'regular'].includes(t.account_type?.toLowerCase())
     );
@@ -90,7 +80,6 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
 
     // Determine which table to fetch from
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
-    console.log(`[Stock] 📊 Using price table: "${priceTable}" (priceSource parameter was: "${priceSource}")`);
 
     // Fetch prices from selected source (stock_master or stock_mapping)
     // Note: stock_mapping may not have category/sector columns, so we only select what's guaranteed
@@ -108,7 +97,6 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
 
     if (masterError) {
       console.error(`[Stock] ❌ Error fetching from ${priceTable}:`, masterError);
-      console.log(`[Stock] ⚠️  Falling back to stock_master for prices...`);
       
       // Fallback to stock_master if the selected table fails
       const { data: fallbackMasters, error: fallbackError } = await fetchAllRows(
@@ -122,8 +110,6 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
       if (fallbackError) throw fallbackError;
       masters = fallbackMasters;
     }
-
-    console.log(`[Stock] Fetched ${masters?.length || 0} price entries from ${priceTable}`);
     
     // If we used stock_mapping, also fetch category/sector from stock_master for enrichment
     let categoryData = [];
@@ -174,11 +160,9 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
       if (priceTable === 'stock_mapping') {
         const fallback = stockMasterFallbackMap[normalizedKey];
         if ((!cmp || cmp === 0) && fallback?.cmp) {
-          console.log(`[Stock Open] Using fallback CMP for ${m.stock_name}: ${fallback.cmp}`);
           cmp = fallback.cmp;
         }
         if ((!lcp || lcp === 0) && fallback?.lcp) {
-          console.log(`[Stock Open] Using fallback LCP for ${m.stock_name}: ${fallback.lcp}`);
           lcp = fallback.lcp;
         }
       }
@@ -187,11 +171,6 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
         cmp: cmp,
         lcp: lcp,
       };
-      
-      // Log AARTIIND specifically for debugging
-      if (m.stock_name && m.stock_name.includes('AARTI')) {
-        console.log(`[Stock] Found AARTI stock in ${priceTable}: "${m.stock_name}" -> normalized: "${normalizedKey}", CMP: ${m.cmp}, LCP: ${lcp}`);
-      }
     });
     
     // Populate category and sector maps
@@ -329,8 +308,6 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
  * Get closed stock holdings
  */
 export async function getClosedStockData(supabase, userId, priceSource = 'stock_master') {
-  console.log(`[Stock] Fetching closed stock holdings for user: ${userId}, priceSource: ${priceSource}`);
-
   try {
     // Fetch closed transactions
     const { data: transactions, error: txnError } = await fetchAllRows(
@@ -349,7 +326,6 @@ export async function getClosedStockData(supabase, userId, priceSource = 'stock_
 
     // Determine which table to fetch from
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
-    console.log(`[Stock] Using price table for closed: ${priceTable}`);
 
     // Fetch prices from selected source
     let { data: masters, error: masterError } = await fetchAllRows(
@@ -362,7 +338,6 @@ export async function getClosedStockData(supabase, userId, priceSource = 'stock_
 
     if (masterError) {
       console.error(`[Stock] Error fetching from ${priceTable}:`, masterError);
-      console.log(`[Stock] Falling back to stock_master for closed...`);
       
       const { data: fallbackMasters, error: fallbackError } = await fetchAllRows(
         supabase,
@@ -403,11 +378,9 @@ export async function getClosedStockData(supabase, userId, priceSource = 'stock_
       if (priceTable === 'stock_mapping') {
         const fallback = stockMasterFallbackMapClosed[normalizedKey];
         if ((!cmp || cmp === 0) && fallback?.cmp) {
-          console.log(`[Stock Closed] Using fallback CMP for ${m.stock_name}: ${fallback.cmp}`);
           cmp = fallback.cmp;
         }
         if ((!lcp || lcp === 0) && fallback?.lcp) {
-          console.log(`[Stock Closed] Using fallback LCP for ${m.stock_name}: ${fallback.lcp}`);
           lcp = fallback.lcp;
         }
       }
@@ -498,8 +471,6 @@ export async function getClosedStockData(supabase, userId, priceSource = 'stock_
  * Get ETF holdings
  */
 export async function getETFData(supabase, userId, priceSource = 'stock_master') {
-  console.log(`[Stock] Fetching ETF data for user: ${userId}, priceSource: ${priceSource}`);
-
   try {
     const { data: transactions, error: txnError } = await fetchAllRows(
       supabase,
@@ -510,16 +481,12 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
       }
     );
 
-    console.log(`[Stock] Raw ETF-related transactions fetched: ${transactions?.length || 0}`);
-    
     const etfTransactions = (transactions || []).filter(t => t.equity_type?.toLowerCase() === 'etf');
-    console.log(`[Stock] Filtered ETF transactions: ${etfTransactions.length}`);
 
     if (txnError) throw txnError;
 
     // Determine which table to fetch from
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
-    console.log(`[Stock] Using price table for ETF: ${priceTable}`);
 
     // Fetch prices from selected source
     let { data: masters, error: masterError } = await fetchAllRows(
@@ -532,7 +499,6 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
 
     if (masterError) {
       console.error(`[Stock] Error fetching from ${priceTable}:`, masterError);
-      console.log(`[Stock] Falling back to stock_master for ETF...`);
       
       const { data: fallbackMasters, error: fallbackError } = await fetchAllRows(
         supabase,
@@ -573,11 +539,9 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
       if (priceTable === 'stock_mapping') {
         const fallback = stockMasterFallbackMapETF[normalizedKey];
         if ((!cmp || cmp === 0) && fallback?.cmp) {
-          console.log(`[Stock ETF] Using fallback CMP for ${m.stock_name}: ${fallback.cmp}`);
           cmp = fallback.cmp;
         }
         if ((!lcp || lcp === 0) && fallback?.lcp) {
-          console.log(`[Stock ETF] Using fallback LCP for ${m.stock_name}: ${fallback.lcp}`);
           lcp = fallback.lcp;
         }
       }
@@ -700,11 +664,8 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
  * Get portfolio summary with account-wise breakdown
  */
 export async function getPortfolioData(supabase, userId, priceSource = 'stock_master') {
-  console.log(`[Stock] Fetching portfolio data for user: ${userId}, priceSource: ${priceSource}`);
-
   try {
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
-    console.log(`[Stock] Using price table for portfolio: ${priceTable}`);
 
     // Only select columns that are guaranteed to exist in the price table
     const priceSelect = priceTable === 'stock_mapping' 
@@ -732,7 +693,6 @@ export async function getPortfolioData(supabase, userId, priceSource = 'stock_ma
     let finalMasters = masters;
     if (masterError) {
       console.error(`[Stock] Error fetching from ${priceTable}:`, masterError);
-      console.log(`[Stock] Falling back to stock_master for portfolio...`);
       
       const { data: fallbackMasters, error: fallbackError } = await fetchAllRows(
         supabase,
@@ -777,11 +737,9 @@ export async function getPortfolioData(supabase, userId, priceSource = 'stock_ma
       if (priceTable === 'stock_mapping') {
         const fallback = stockMasterFallbackMapPortfolio[normalizedKey];
         if ((!cmp || cmp === 0) && fallback?.cmp) {
-          console.log(`[Stock Portfolio] Using fallback CMP for ${m.stock_name}: ${fallback.cmp}`);
           cmp = fallback.cmp;
         }
         if ((!lcp || lcp === 0) && fallback?.lcp) {
-          console.log(`[Stock Portfolio] Using fallback LCP for ${m.stock_name}: ${fallback.lcp}`);
           lcp = fallback.lcp;
         }
       }
@@ -950,8 +908,6 @@ export async function getPortfolioData(supabase, userId, priceSource = 'stock_ma
  * Bulk update account type for a stock  
  */  
 export async function bulkUpdateAccountType(supabase, userId, stockName, newAccountType) {  
-  console.log(`[Stock] Bulk updating account type to \"${newAccountType}\" for stock \"${stockName}\" and user: ${userId}`);  
-  
   try {  
     const { data, error } = await supabase  
       .from('stock_transactions')  
