@@ -31,8 +31,8 @@ router.get(
   cacheMiddleware(CACHE_TTL),
   async (req, res, next) => {
     try {
-      // Use the primary accounts by default to match notification/portfolio logic
-      const userId = req.userId || req.query.userId || ['PM', 'PDM', 'PSM', 'BDM'];
+      // Use 'all' accounts by default to match Bank Assets page totals
+      const userId = req.userId || req.query.userId || 'all';
       const priceSource = req.query.priceSource || 'stock_master';
 
       const result = await getDashboardAssetAllocation(supabase, userId, priceSource);
@@ -60,7 +60,7 @@ router.get(
   cacheMiddleware(CACHE_TTL),
   async (req, res, next) => {
     try {
-      const userId = req.userId || req.query.userId || ['PM', 'PDM', 'PSM', 'BDM'];
+      const userId = req.userId || req.query.userId || 'all';
       const priceSource = req.query.priceSource || 'stock_master';
 
       const summary = await getDashboardSummary(supabase, userId, priceSource);

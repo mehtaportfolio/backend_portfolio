@@ -58,7 +58,7 @@ const reduceLotUnits = (lots = [], unitsToRemove = 0) => {
 };
 
 /**
- * Calculate bank holdings from latest month
+ * Calculate bank holdings from all transactions in the latest month
  */
 export function calculateBankHoldings(transactions = []) {
   if (!transactions.length) {
@@ -74,51 +74,37 @@ export function calculateBankHoldings(transactions = []) {
     return { savings: 0, demat: 0, total: 0 };
   }
 
-  let latestMonthNumeric = -Infinity;
+  // Find the latest month (YYYY-MM) in the entire dataset
+  let latestMonthStr = '';
   filtered.forEach((txn) => {
-    if (!txn?.txn_date) return;
-    const date = new Date(txn.txn_date);
-    if (Number.isNaN(date.getTime())) return;
-    const monthNumeric = date.getFullYear() * 100 + (date.getMonth() + 1);
-    if (monthNumeric > latestMonthNumeric) {
-      latestMonthNumeric = monthNumeric;
+    const dateStr = typeof txn.txn_date === 'string' ? txn.txn_date : txn.txn_date?.toISOString?.() || '';
+    const ym = dateStr.slice(0, 7);
+    if (!latestMonthStr || ym > latestMonthStr) {
+      latestMonthStr = ym;
     }
   });
 
-  if (!Number.isFinite(latestMonthNumeric) || latestMonthNumeric < 0) {
+  if (!latestMonthStr) {
     return { savings: 0, demat: 0, total: 0 };
   }
 
-  const groups = new Map();
-  filtered.forEach((txn) => {
-    const key = `${txn.account_name || ''}||${txn.bank_name || ''}||${txn.account_type || ''}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(txn);
-  });
-
+  // Aggregate all transactions for that month
   let savingsSum = 0;
   let dematSum = 0;
 
-  groups.forEach((list) => {
-    const match = [...list]
-      .filter((txn) => txn?.txn_date)
-      .sort((a, b) => new Date(b.txn_date || 0) - new Date(a.txn_date || 0))
-      .find((txn) => {
-        const date = new Date(txn.txn_date);
-        if (Number.isNaN(date.getTime())) return false;
-        const monthNumeric = date.getFullYear() * 100 + (date.getMonth() + 1);
-        return monthNumeric === latestMonthNumeric;
-      });
+  filtered.forEach((txn) => {
+    const dateStr = typeof txn.txn_date === 'string' ? txn.txn_date : txn.txn_date?.toISOString?.() || '';
+    const ym = dateStr.slice(0, 7);
+    
+    if (ym === latestMonthStr) {
+      const type = String(txn.account_type || '').toLowerCase();
+      const amount = toNumber(txn.amount);
 
-    if (!match) return;
-
-    const type = String(match.account_type || '').toLowerCase();
-    const amount = toNumber(match.amount);
-
-    if (type === 'savings') {
-      savingsSum += amount;
-    } else if (type === 'demat') {
-      dematSum += amount;
+      if (type === 'savings') {
+        savingsSum += amount;
+      } else if (type === 'demat') {
+        dematSum += amount;
+      }
     }
   });
 

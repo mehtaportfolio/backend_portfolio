@@ -167,6 +167,9 @@ export async function fetchUserAllData(supabase, userId, priceSource = 'stock_ma
       select: 'account_name, year, fy, other_charges, dp_charges',
       filters: [filterFn]
     },
+    other_transactions: {
+      select: 'account_name, transaction_type, amount',
+    },
   };
 
   // If using stock_mapping, also fetch stock_master for fallback
