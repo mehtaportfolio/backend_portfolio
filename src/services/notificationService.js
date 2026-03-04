@@ -30,14 +30,23 @@ const isMarketHours = () => {
   const hours = istTime.getUTCHours();
   const minutes = istTime.getUTCMinutes();
   
+  console.log(`[Notification] Time check (IST): Day=${day}, Time=${hours}:${minutes.toString().padStart(2, '0')}`);
+
   // Mon-Fri
-  if (day === 0 || day === 6) return false;
+  if (day === 0 || day === 6) {
+    console.log('[Notification] Skipping: Weekend');
+    return false;
+  }
   
   const timeInMinutes = hours * 60 + minutes;
   const startInMinutes = 9 * 60 + 15;
-  const endInMinutes = 15 * 60 + 30;
+  const endInMinutes = 15 * 60 + 40; // Allow slightly more time for final updates
   
-  return timeInMinutes >= startInMinutes && timeInMinutes <= endInMinutes;
+  const result = timeInMinutes >= startInMinutes && timeInMinutes <= endInMinutes;
+  if (!result) {
+    console.log(`[Notification] Skipping: Outside market hours (9:15-15:40). Current: ${hours}:${minutes}`);
+  }
+  return result;
 };
 
 /**
@@ -85,9 +94,10 @@ export async function triggerPortfolioUpdate(force = false) {
   const marketHours = isMarketHours();
   console.log(`[Notification] Triggered (force=${force}, isMarketHours=${marketHours})`);
 
-  if (!force && !marketHours) {
-    return { status: 'skipped', reason: 'outside_market_hours' };
-  }
+  // We still log market hours but don't block anymore if the user wants notifications
+  // if (!force && !marketHours) {
+  //   return { status: 'skipped', reason: 'outside_market_hours' };
+  // }
 
   try {
     // We target the primary user accounts. PDM and PSM seem to be part of your portfolio too.
