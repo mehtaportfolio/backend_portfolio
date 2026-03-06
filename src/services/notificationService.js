@@ -86,18 +86,40 @@ export async function sendPushNotification(payload) {
   }
 }
 
+// Memory state for notification pausing
+let notificationState = {
+  lastSentValues: [], // Array of { profit: number, change: number }
+  isPausedDueToSameValues: false
+};
+
+/**
+ * Reset notification state (called by restart endpoint)
+ */
+export function restartNotifications() {
+  notificationState = {
+    lastSentValues: [],
+    isPausedDueToSameValues: false
+  };
+  console.log('[Notification] State reset manually');
+  return { status: 'success', message: 'Notifications restarted' };
+}
+
 /**
  * Trigger portfolio update notification
- * @param {boolean} force - Skip market hours check if true
+ * @param {boolean} force - Skip market hours and pause check if true
  */
 export async function triggerPortfolioUpdate(force = false) {
   const marketHours = isMarketHours();
-  console.log(`[Notification] Triggered (force=${force}, isMarketHours=${marketHours})`);
+  console.log(`[Notification] Triggered (force=${force}, isMarketHours=${marketHours}, isPaused=${notificationState.isPausedDueToSameValues})`);
 
-  // We still log market hours but don't block anymore if the user wants notifications
-  // if (!force && !marketHours) {
-  //   return { status: 'skipped', reason: 'outside_market_hours' };
-  // }
+  if (!force) {
+    if (!marketHours) {
+      return { status: 'skipped', reason: 'outside_market_hours' };
+    }
+    if (notificationState.isPausedDueToSameValues) {
+      return { status: 'skipped', reason: 'paused_due_to_holiday_or_error' };
+    }
+  }
 
   try {
     // We target the primary user accounts. PDM and PSM seem to be part of your portfolio too.
@@ -117,6 +139,36 @@ export async function triggerPortfolioUpdate(force = false) {
     const dayChangePercent = (totalMarketValue - overallDayChange) > 0 
       ? (overallDayChange / (totalMarketValue - overallDayChange)) * 100 
       : 0;
+
+    // Check for 3 consecutive same values (Holiday/Error detection)
+    if (!force) {
+      const currentValues = { 
+        profit: Math.round(totalProfit), 
+        change: Math.round(overallDayChange) 
+      };
+      
+      const lastValues = notificationState.lastSentValues;
+      
+      // Check if current is same as previous
+      const isSameAsLast = lastValues.length > 0 && 
+                           lastValues[lastValues.length - 1].profit === currentValues.profit && 
+                           lastValues[lastValues.length - 1].change === currentValues.change;
+
+      if (isSameAsLast) {
+        notificationState.lastSentValues.push(currentValues);
+        console.log(`[Notification] Same values detected (${lastValues.length} consecutive)`);
+        
+        if (notificationState.lastSentValues.length >= 3) {
+          notificationState.isPausedDueToSameValues = true;
+          console.log('[Notification] Pausing further notifications: 3 consecutive same values (Holiday/Error)');
+          
+          // Still send this 3rd one, but next ones will be skipped
+        }
+      } else {
+        // Different values, reset the tracking but keep the current one
+        notificationState.lastSentValues = [currentValues];
+      }
+    }
 
     // Aggregate regular stocks by name to check combined profit threshold
     const regularStocksMap = new Map();

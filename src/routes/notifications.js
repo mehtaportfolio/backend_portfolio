@@ -1,6 +1,6 @@
 import express from 'express';
 import { supabase } from '../db/supabaseClient.js';
-import { triggerPortfolioUpdate } from '../services/notificationService.js';
+import { triggerPortfolioUpdate, restartNotifications } from '../services/notificationService.js';
 
 const router = express.Router();
 
@@ -45,6 +45,12 @@ router.get('/trigger', async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// Restart notifications (reset holiday/error pause)
+router.post('/restart', (req, res) => {
+  const result = restartNotifications();
+  res.json(result);
 });
 
 export default router;
