@@ -73,6 +73,7 @@ const { default: stockRoutes } = await import('./routes/stocks.js');
 const { default: schemesRoutes } = await import('./routes/schemes.js');
 const { default: cacheRoutes } = await import('./routes/cache.js');
 const { default: notificationRoutes } = await import('./routes/notifications.js');
+const { default: dividendRoutes } = await import('./routes/dividend.js');
 const { sendAngelOneStatusNotification } = await import('./services/notificationService.js');
 const { initializeStockMapping } = await import('./db/initStockMapping.js');
 
@@ -84,6 +85,7 @@ app.use('/api/stock', stockRoutes);
 app.use('/api/schemes', schemesRoutes);
 app.use('/api/cache', cacheRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/dividend', dividendRoutes);
 
 // ✅ Add Angel One status route
 app.post('/api/angel-one-status', async (req, res, next) => {

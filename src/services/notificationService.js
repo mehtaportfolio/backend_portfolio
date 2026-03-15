@@ -200,6 +200,40 @@ export async function triggerPortfolioUpdate(force = false) {
 
     let notificationBody = `Profit: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(2)}%)\nDay: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(2)}%)`;
 
+    // Fetch Corporate Actions for Today (IST)
+    try {
+      const now = new Date();
+      const istOffset = 5.5 * 60 * 60 * 1000;
+      const istTime = new Date(now.getTime() + istOffset);
+      const todayIST = istTime.toISOString().split('T')[0];
+
+      const { data: bonusActions, error: bonusError } = await supabase
+        .from('bonus_split')
+        .select('stock_name, type, ratio')
+        .eq('date', todayIST)
+        .eq('status', 'active');
+
+      if (!bonusError && bonusActions && bonusActions.length > 0) {
+        notificationBody += '\n\nAction Today:';
+        // Use unique actions (different sources might have same action)
+        const uniqueActions = [];
+        const seen = new Set();
+        bonusActions.forEach(a => {
+          const key = `${a.stock_name}|${a.type}|${a.ratio}`;
+          if (!seen.has(key)) {
+            uniqueActions.push(a);
+            seen.add(key);
+          }
+        });
+
+        uniqueActions.forEach(a => {
+          notificationBody += `\n• ${a.stock_name}: ${a.type} (${a.ratio})`;
+        });
+      }
+    } catch (e) {
+      console.error('[Notification] Error fetching bonus actions:', e);
+    }
+
     if (highProfitRegularStocks.length > 0) {
       notificationBody += '\n\nHigh Profit Stocks:';
       highProfitRegularStocks.forEach(s => {
