@@ -636,6 +636,16 @@ export async function getAnalysisSummary(userId = 'all', priceSource = 'stock_ma
           if (lcp > 0) lcpMap.set(stockName, lcp);
         }
       });
+    } else {
+      // If we're using stock_master directly, populate from stockMasterMap
+      stockMasterMap.forEach((row, stockName) => {
+        if (!cmpMap.has(stockName)) {
+          cmpMap.set(stockName, toNumber(row.cmp));
+        }
+        if (!lcpMap.has(stockName)) {
+          lcpMap.set(stockName, toNumber(row.lcp));
+        }
+      });
     }
     
     const fundPriceMap = new Map((fundMaster || []).map((m) => [m.fund_short_name, { cmp: toNumber(m.cmp), lcp: toNumber(m.lcp) }]));
