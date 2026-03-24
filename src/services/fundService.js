@@ -21,8 +21,15 @@ function setCached(amfi, data) {
   }
 }
 
-const calculateReturn = (startNav, endNav) =>
-  ((endNav - startNav) / startNav) * 100;
+const calculateReturn = (startNav, endNav, days) => {
+  if (days > 365) {
+    // Annualized Return (CAGR) for periods > 1 year
+    const years = days / 365;
+    return (Math.pow(endNav / startNav, 1 / years) - 1) * 100;
+  }
+  // Absolute Return for periods <= 1 year
+  return ((endNav - startNav) / startNav) * 100;
+};
 
 const periods = {
   "1M": 30,
@@ -45,7 +52,8 @@ const getStandardReturns = (navHistory) => {
     if (closest)
       results[key] = calculateReturn(
         closest.nav,
-        navHistory[navHistory.length - 1].nav
+        navHistory[navHistory.length - 1].nav,
+        days
       );
   }
   return results;
@@ -54,6 +62,7 @@ const getStandardReturns = (navHistory) => {
 const getRollingReturns = (navHistory, years) => {
   const rollingReturns = [];
   if (!navHistory?.length) return rollingReturns;
+  const daysInPeriod = years * 365;
   
   for (let i = 0; i < navHistory.length; i += 12) {
     const startDate = new Date(navHistory[i].date);
@@ -62,7 +71,7 @@ const getRollingReturns = (navHistory, years) => {
 
     const endNavObj = navHistory.find((nav) => new Date(nav.date) >= endDate);
     if (endNavObj) {
-      const ret = calculateReturn(navHistory[i].nav, endNavObj.nav);
+      const ret = calculateReturn(navHistory[i].nav, endNavObj.nav, daysInPeriod);
       rollingReturns.push({
         start: navHistory[i].date,
         end: endNavObj.date,
