@@ -124,6 +124,45 @@ app.post('/api/angel-one-status', async (req, res, next) => {
   }
 });
 
+// 🔹 Proxy endpoint for Render service deployment/restart
+app.post('/api/render/deploy', async (req, res) => {
+  const { serviceId, apiKey, clearCache = 'clear' } = req.body;
+
+  if (!serviceId) {
+    return res.status(400).json({ status: 'error', message: 'serviceId is required' });
+  }
+
+  // Use provided apiKey or fallback to environment variable
+  const token = apiKey || process.env.RENDER_API_KEY;
+
+  if (!token) {
+    return res.status(401).json({ status: 'error', message: 'Render API key is missing' });
+  }
+
+  try {
+    const response = await axios.post(
+      `https://api.render.com/v1/services/${serviceId}/deploys`,
+      { clearCache },
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        }
+      }
+    );
+
+    res.status(response.status).json(response.data);
+  } catch (error) {
+    console.error(`❌ Error triggering Render deploy for ${serviceId}:`, error.message);
+    res.status(error.response?.status || 500).json({
+      status: 'error',
+      message: error.response?.data?.message || error.message || 'Failed to trigger Render deploy',
+      error: error.response?.data
+    });
+  }
+});
+
 // 🔹 Proxy endpoints for Angel One services
 app.get('/refresh-stocks', async (req, res) => {
   try {
@@ -197,6 +236,44 @@ app.post('/sync-lcp', async (req, res) => {
       message: error.message || 'Failed to trigger LCP sync',
       error: error.response?.data || error.message
     });
+  }
+});
+
+// Proxy endpoints for other Render services
+app.post('/indices/restart', async (req, res) => {
+  try {
+    const response = await axios.post('https://nse-indices-v3mk.onrender.com/restart', {}, { timeout: 60000 });
+    res.json(response.data);
+  } catch (error) {
+    res.status(error.response?.status || 500).json({ status: 'error', message: error.message });
+  }
+});
+
+app.post('/yahoo-price/trigger', async (req, res) => {
+  try {
+    // Yahoo Price might be a GET or POST depending on how it's implemented
+    const response = await axios.get('https://stock-yahoo-allq.onrender.com', { timeout: 60000 });
+    res.json(response.data);
+  } catch (error) {
+    res.status(error.response?.status || 500).json({ status: 'error', message: error.message });
+  }
+});
+
+app.get('/corp-action/trigger', async (req, res) => {
+  try {
+    const response = await axios.get('https://corp-action-backend-cics.onrender.com/trigger', { timeout: 60000 });
+    res.json(response.data);
+  } catch (error) {
+    res.status(error.response?.status || 500).json({ status: 'error', message: error.message });
+  }
+});
+
+app.post('/googlesheet/restart', async (req, res) => {
+  try {
+    const response = await axios.post('https://googlesheet-dd00.onrender.com/restart', {}, { timeout: 60000 });
+    res.json(response.data);
+  } catch (error) {
+    res.status(error.response?.status || 500).json({ status: 'error', message: error.message });
   }
 });
 
