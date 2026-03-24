@@ -4,11 +4,30 @@
  */
 
 import express from 'express';
+import axios from 'axios';
 import authMiddleware from '../middleware/auth.js';
 import cache from '../middleware/cache.js';
 import { getBankData, getNPSData, getBDMData, getEPFData, getPPFData, getMFData } from '../services/assetService.js';
 
 const router = express.Router();
+
+/**
+ * GET /api/assets/mf/proxy/:id
+ * Proxy for public MF API to avoid CORS issues
+ */
+router.get('/mf/proxy/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const response = await axios.get(`https://api.mfapi.in/mf/${id}`);
+    res.json(response.data);
+  } catch (error) {
+    console.error(`MF Proxy Error for ID ${req.params.id}:`, error.message);
+    res.status(error.response?.status || 500).json({
+      error: 'Failed to fetch data from MF API',
+      details: error.message
+    });
+  }
+});
 
 /**
  * GET /api/assets/bank
