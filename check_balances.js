@@ -1,13 +1,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-dotenv.config({ path: path.join(__dirname, '../.env.backend') });
+dotenv.config({ path: 'backend/.env.backend' });
 
 const supabase = createClient(
   process.env.SUPABASE_URL || '',
@@ -48,9 +42,9 @@ async function run() {
     if (!byAccount[name]) byAccount[name] = 0;
     byAccount[name] += amount;
 
-    if (type === 'savings' || type === 'Savings') {
+    if (type === 'savings') {
       summary.Savings += amount;
-    } else if (type === 'demat' || type === 'Demat') {
+    } else if (type === 'demat') {
       summary.Demat += amount;
     }
   });

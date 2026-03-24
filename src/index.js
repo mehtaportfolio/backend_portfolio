@@ -74,6 +74,7 @@ const { default: schemesRoutes } = await import('./routes/schemes.js');
 const { default: cacheRoutes } = await import('./routes/cache.js');
 const { default: notificationRoutes } = await import('./routes/notifications.js');
 const { default: dividendRoutes } = await import('./routes/dividend.js');
+const { default: fundsRoutes } = await import('./routes/funds.js');
 const { sendAngelOneStatusNotification } = await import('./services/notificationService.js');
 const { initializeStockMapping } = await import('./db/initStockMapping.js');
 
@@ -86,6 +87,29 @@ app.use('/api/schemes', schemesRoutes);
 app.use('/api/cache', cacheRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dividend', dividendRoutes);
+app.use('/funds', fundsRoutes);
+
+// 🔄 Cache invalidation endpoints for various asset types (from server.old.js)
+const cacheInvalidationHandler = async (req, res) => {
+  try {
+    const { default: cache } = await import('./middleware/cache.js');
+    const { clearFundCache } = await import('./services/fundService.js');
+    cache.clear();
+    clearFundCache();
+    res.json({ status: "ok", message: "Cache invalidated" });
+  } catch (err) {
+    console.error("Cache invalidation error:", err);
+    res.status(500).json({ error: "Failed to invalidate cache" });
+  }
+};
+
+app.post("/api/mf/invalidate-cache", cacheInvalidationHandler);
+app.post("/api/stock/invalidate-cache", cacheInvalidationHandler);
+app.post("/api/nps/invalidate-cache", cacheInvalidationHandler);
+app.post("/api/assets/bank/invalidate-cache", cacheInvalidationHandler);
+app.post("/api/assets/bdm/invalidate-cache", cacheInvalidationHandler);
+app.post("/api/sip/invalidate-cache", cacheInvalidationHandler);
+app.post("/api/:assetType/invalidate-cache", cacheInvalidationHandler);
 
 // ✅ Add Angel One status route
 app.post('/api/angel-one-status', async (req, res, next) => {

@@ -1,5 +1,6 @@
 import express from 'express';
 import cache from '../middleware/cache.js';
+import { clearFundCache } from '../services/fundService.js';
 
 const router = express.Router();
 
@@ -10,6 +11,7 @@ const router = express.Router();
 router.post('/clear', (req, res) => {
   try {
     cache.clear();
+    clearFundCache();
     res.json({
       success: true,
       message: 'Cache cleared successfully'
