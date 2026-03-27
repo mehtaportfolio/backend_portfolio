@@ -36,6 +36,28 @@ router.post('/subscribe', async (req, res, next) => {
   }
 });
 
+// Unsubscribe from push notifications
+router.post('/unsubscribe', async (req, res, next) => {
+  try {
+    const { endpoint } = req.body;
+    
+    if (!endpoint) {
+      return res.status(400).json({ error: 'Endpoint is required' });
+    }
+
+    const { error } = await supabase
+      .from('push_subscriptions')
+      .delete()
+      .eq('subscription->endpoint', endpoint);
+
+    if (error) throw error;
+
+    res.json({ message: 'Unsubscribed successfully' });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Trigger a notification (can be called by cron-job.org)
 router.get('/trigger', async (req, res, next) => {
   try {
