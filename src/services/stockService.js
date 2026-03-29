@@ -85,7 +85,7 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
     // Note: stock_mapping may not have category/sector columns, so we only select what's guaranteed
     const priceSelect = priceTable === 'stock_mapping' 
       ? 'stock_name, cmp, lcp'
-      : 'stock_name, cmp, lcp, category, sector';
+      : 'stock_name, cmp, lcp, category, sector, basic_industry';
     
     let { data: masters, error: masterError } = await fetchAllRows(
       supabase,
@@ -103,7 +103,7 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
         supabase,
         'stock_master',
         {
-          select: 'stock_name, cmp, lcp, category, sector',
+          select: 'stock_name, cmp, lcp, category, sector, basic_industry',
         }
       );
       
@@ -113,13 +113,12 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
     
     // If we used stock_mapping, also fetch category/sector from stock_master for enrichment
     let categoryData = [];
-    let sectorData = [];
     if (priceTable === 'stock_mapping' && !masterError) {
       const { data: masterEnrich, error: enrichError } = await fetchAllRows(
         supabase,
         'stock_master',
         {
-          select: 'stock_name, category, sector',
+          select: 'stock_name, category, sector, basic_industry',
         }
       );
       if (!enrichError && masterEnrich) {
@@ -149,6 +148,7 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
     const masterMap = {};
     const categoryMap = {};
     const sectorMap = {};
+    const basicIndustryMap = {};
 
     // Create maps with normalized keys to handle name mismatches
     (masters || []).forEach((m) => {
@@ -178,6 +178,7 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
       const normalizedKey = normalizeStockName(m.stock_name);
       if (m.category) categoryMap[normalizedKey] = m.category;
       if (m.sector) sectorMap[normalizedKey] = m.sector;
+      if (m.basic_industry) basicIndustryMap[normalizedKey] = m.basic_industry;
     });
 
     // Group by stock name, with normalized lookup
@@ -193,6 +194,7 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
           lcp: masterMap[normalizedKey]?.lcp || 0,
           category: categoryMap[normalizedKey] || null,
           sector: sectorMap[normalizedKey] || null,
+          basic_industry: basicIndustryMap[normalizedKey] || null,
         };
       }
       grouped[stockName].transactions.push(txn);
@@ -244,6 +246,9 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
         urpPct: urpPct,
         xirr: xirr,
         transactions: group.transactions,
+        category: group.category,
+        sector: group.sector,
+        basic_industry: group.basic_industry,
       });
     });
 
@@ -327,12 +332,16 @@ export async function getClosedStockData(supabase, userId, priceSource = 'stock_
     // Determine which table to fetch from
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
 
+    const priceSelect = priceTable === 'stock_mapping' 
+      ? 'stock_name, cmp, lcp'
+      : 'stock_name, cmp, lcp, category, sector, basic_industry';
+
     // Fetch prices from selected source
     let { data: masters, error: masterError } = await fetchAllRows(
       supabase,
       priceTable,
       {
-        select: 'stock_name, cmp, lcp',
+        select: priceSelect,
       }
     );
 
@@ -343,7 +352,7 @@ export async function getClosedStockData(supabase, userId, priceSource = 'stock_
         supabase,
         'stock_master',
         {
-          select: 'stock_name, cmp, lcp',
+          select: 'stock_name, cmp, lcp, category, sector, basic_industry',
         }
       );
       
@@ -351,7 +360,24 @@ export async function getClosedStockData(supabase, userId, priceSource = 'stock_
       masters = fallbackMasters;
     }
 
-    // 🔹 When using stock_mapping (Angel One), fetch stock_master data as fallback
+    // 🔹 When using stock_mapping (Angel One), also fetch category/sector/basic_industry from stock_master
+    let categoryData = [];
+    if (priceTable === 'stock_mapping' && !masterError) {
+      const { data: masterEnrich, error: enrichError } = await fetchAllRows(
+        supabase,
+        'stock_master',
+        {
+          select: 'stock_name, category, sector, basic_industry',
+        }
+      );
+      if (!enrichError && masterEnrich) {
+        categoryData = masterEnrich;
+      }
+    } else if (masters) {
+      categoryData = masters;
+    }
+
+    // 🔹 When using stock_mapping (Angel One), fetch stock_master data as fallback for prices
     let stockMasterFallbackMapClosed = {};
     if (priceTable === 'stock_mapping' && !masterError) {
       const { data: masterForFallback } = await fetchAllRows(
@@ -369,6 +395,10 @@ export async function getClosedStockData(supabase, userId, priceSource = 'stock_
     }
 
     const masterMap = {};
+    const categoryMap = {};
+    const sectorMap = {};
+    const basicIndustryMap = {};
+
     (masters || []).forEach((m) => {
       const normalizedKey = normalizeStockName(m.stock_name);
       let cmp = toNumber(m.cmp);
@@ -391,6 +421,14 @@ export async function getClosedStockData(supabase, userId, priceSource = 'stock_
       };
     });
 
+    // Populate category, sector, basic_industry maps
+    (categoryData || []).forEach((m) => {
+      const normalizedKey = normalizeStockName(m.stock_name);
+      if (m.category) categoryMap[normalizedKey] = m.category;
+      if (m.sector) sectorMap[normalizedKey] = m.sector;
+      if (m.basic_industry) basicIndustryMap[normalizedKey] = m.basic_industry;
+    });
+
     // Group by stock name
     const grouped = {};
     (transactions || []).forEach((txn) => {
@@ -402,6 +440,9 @@ export async function getClosedStockData(supabase, userId, priceSource = 'stock_
           transactions: [],
           cmp: masterMap[normalizedKey]?.cmp || 0,
           lcp: masterMap[normalizedKey]?.lcp || 0,
+          category: categoryMap[normalizedKey] || null,
+          sector: sectorMap[normalizedKey] || null,
+          basic_industry: basicIndustryMap[normalizedKey] || null,
         };
       }
       grouped[stockName].transactions.push(txn);
@@ -451,6 +492,9 @@ export async function getClosedStockData(supabase, userId, priceSource = 'stock_
         urpPct: urpPct,
         xirr: avgXirr,
         transactions: group.transactions,
+        category: group.category,
+        sector: group.sector,
+        basic_industry: group.basic_industry,
       });
     });
 
@@ -488,12 +532,16 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
     // Determine which table to fetch from
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
 
+    const priceSelect = priceTable === 'stock_mapping' 
+      ? 'stock_name, cmp, lcp'
+      : 'stock_name, cmp, lcp, category, sector, basic_industry';
+
     // Fetch prices from selected source
     let { data: masters, error: masterError } = await fetchAllRows(
       supabase,
       priceTable,
       {
-        select: 'stock_name, cmp, lcp',
+        select: priceSelect,
       }
     );
 
@@ -504,7 +552,7 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
         supabase,
         'stock_master',
         {
-          select: 'stock_name, cmp, lcp',
+          select: 'stock_name, cmp, lcp, category, sector, basic_industry',
         }
       );
       
@@ -513,6 +561,23 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
     }
 
     // 🔹 When using stock_mapping (Angel One), fetch stock_master data as fallback
+    let categoryData = [];
+    if (priceTable === 'stock_mapping' && !masterError) {
+      const { data: masterEnrich, error: enrichError } = await fetchAllRows(
+        supabase,
+        'stock_master',
+        {
+          select: 'stock_name, category, sector, basic_industry',
+        }
+      );
+      if (!enrichError && masterEnrich) {
+        categoryData = masterEnrich;
+      }
+    } else if (masters) {
+      categoryData = masters;
+    }
+
+    // 🔹 When using stock_mapping (Angel One), fetch stock_master data as fallback for prices
     let stockMasterFallbackMapETF = {};
     if (priceTable === 'stock_mapping' && !masterError) {
       const { data: masterForFallback } = await fetchAllRows(
@@ -530,6 +595,10 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
     }
 
     const masterMap = {};
+    const categoryMap = {};
+    const sectorMap = {};
+    const basicIndustryMap = {};
+
     (masters || []).forEach((m) => {
       const normalizedKey = normalizeStockName(m.stock_name);
       let cmp = toNumber(m.cmp);
@@ -552,6 +621,14 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
       };
     });
 
+    // Populate category, sector, basic_industry maps
+    (categoryData || []).forEach((m) => {
+      const normalizedKey = normalizeStockName(m.stock_name);
+      if (m.category) categoryMap[normalizedKey] = m.category;
+      if (m.sector) sectorMap[normalizedKey] = m.sector;
+      if (m.basic_industry) basicIndustryMap[normalizedKey] = m.basic_industry;
+    });
+
     // Group by stock name
     const grouped = {};
     (etfTransactions || []).forEach((txn) => {
@@ -563,6 +640,9 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
           transactions: [],
           cmp: masterMap[normalizedKey]?.cmp || 0,
           lcp: masterMap[normalizedKey]?.lcp || 0,
+          category: categoryMap[normalizedKey] || null,
+          sector: sectorMap[normalizedKey] || null,
+          basic_industry: basicIndustryMap[normalizedKey] || null,
         };
       }
       grouped[stockName].transactions.push(txn);
@@ -631,6 +711,9 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
         avgBuyPrice: avgBuyPrice,
         xirr: openXirr,
         transactions: openTxns,
+        category: group.category,
+        sector: group.sector,
+        basic_industry: group.basic_industry,
         closedHoldings: {
           invested: closedInvested,
           value: closedValue,
