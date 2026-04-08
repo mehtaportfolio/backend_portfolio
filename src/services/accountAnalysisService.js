@@ -57,7 +57,7 @@ const normalizeHoldings = (holdings = []) => {
   }));
 };
 
-const sumByAccount = (accumulator, accountName, assetType, invested, marketValue) => {
+const sumByAccount = (accumulator, accountName, assetType, invested, marketValue, dayChange = 0) => {
   const normalizedAccount = formatAccountName(accountName);
   // Exclude BDM accounts
   if (normalizedAccount.toUpperCase() === 'BDM') {
@@ -69,6 +69,7 @@ const sumByAccount = (accumulator, accountName, assetType, invested, marketValue
       account_name: normalizedAccount,
       total_invested: 0,
       total_market_value: 0,
+      total_day_change: 0,
       breakdown: {},
     });
   }
@@ -76,14 +77,16 @@ const sumByAccount = (accumulator, accountName, assetType, invested, marketValue
   const accountTotals = accumulator.get(normalizedAccount);
   accountTotals.total_invested += invested;
   accountTotals.total_market_value += marketValue;
+  accountTotals.total_day_change += dayChange;
 
   const breakdownKey = canonicalizeAssetType(assetType);
   if (!accountTotals.breakdown[breakdownKey]) {
-    accountTotals.breakdown[breakdownKey] = { invested: 0, marketValue: 0 };
+    accountTotals.breakdown[breakdownKey] = { invested: 0, marketValue: 0, dayChange: 0 };
   }
 
   accountTotals.breakdown[breakdownKey].invested += invested;
   accountTotals.breakdown[breakdownKey].marketValue += marketValue;
+  accountTotals.breakdown[breakdownKey].dayChange += dayChange;
 };
 
 const attachProfitFields = (accounts = []) => {
@@ -93,16 +96,17 @@ const attachProfitFields = (accounts = []) => {
       ...account,
       profit,
       profitPercent: account.total_invested > 1e-8 ? (profit / account.total_invested) * 100 : 0,
+      dayChangePercent: (account.total_market_value - account.total_day_change) > 1e-8 ? (account.total_day_change / (account.total_market_value - account.total_day_change)) * 100 : 0,
     };
   });
 };
 
 const buildAssetSummary = (accounts) => {
   const summary = {
-    stock: { invested: 0, marketValue: 0 },
-    etf: { invested: 0, marketValue: 0 },
-    mf: { invested: 0, marketValue: 0 },
-    nps: { invested: 0, marketValue: 0 },
+    stock: { invested: 0, marketValue: 0, dayChange: 0 },
+    etf: { invested: 0, marketValue: 0, dayChange: 0 },
+    mf: { invested: 0, marketValue: 0, dayChange: 0 },
+    nps: { invested: 0, marketValue: 0, dayChange: 0 },
   };
 
   accounts.forEach((account) => {
@@ -111,6 +115,7 @@ const buildAssetSummary = (accounts) => {
       if (!summary[key]) return;
       summary[key].invested += values.invested;
       summary[key].marketValue += values.marketValue;
+      summary[key].dayChange += (values.dayChange || 0);
     });
   });
 
@@ -127,7 +132,7 @@ export async function getAccountAnalysis(supabase, userId, priceSource = 'stock_
 
   const data = await fetchUserAllData(supabase, userId, priceSource);
 
-  const { stockCmpMap, fundCmpMap, npsCmpMap } = buildCMPMaps(data);
+  const { stockCmpMap, stockLcpMap, fundCmpMap, fundLcpMap, npsCmpMap, npsLcpMap } = buildCMPMaps(data);
 
   const stockLots = calculateStockLots(data.stock_transactions?.data, stockCmpMap);
   const mfLots = calculateMFLots(data.mf_transactions?.data, fundCmpMap);
@@ -143,24 +148,31 @@ export async function getAccountAnalysis(supabase, userId, priceSource = 'stock_
     const assetLabel = isEtf ? 'etf' : 'stocks';
 
     const accountName = holding.accountName;
+    const lcp = stockLcpMap.get(holding.stockName) || 0;
+    const dayChange = holding.quantity * (holding.cmp - lcp);
 
     sumByAccount(
       accountsMap,
       accountName,
       assetLabel,
       holding.invested,
-      holding.marketValue
+      holding.marketValue,
+      dayChange
     );
   });
 
   // Mutual Funds
   normalizeHoldings(mfLots.holdings).forEach((holding) => {
+    const lcp = fundLcpMap.get(holding.fundName) || 0;
+    const dayChange = holding.units * (holding.cmp - lcp);
+
     sumByAccount(
       accountsMap,
       holding.accountName,
       ASSET_LABELS.mf,
       holding.invested,
-      holding.marketValue
+      holding.marketValue,
+      dayChange
     );
   });
 
@@ -168,12 +180,16 @@ export async function getAccountAnalysis(supabase, userId, priceSource = 'stock_
   (npsHoldings.holdings || []).forEach((holding) => {
     const invested = toNumber(holding.invested);
     const marketValue = toNumber(holding.marketValue);
+    const lcp = npsLcpMap.get(holding.schemeName) || 0;
+    const dayChange = holding.units * (holding.cmp - lcp);
+
     sumByAccount(
       accountsMap,
       holding.accountName,
       ASSET_LABELS.nps,
       invested,
-      marketValue
+      marketValue,
+      dayChange
     );
   });
 
@@ -185,6 +201,7 @@ export async function getAccountAnalysis(supabase, userId, priceSource = 'stock_
   const totals = {
     totalInvested: accounts.reduce((sum, account) => sum + account.total_invested, 0),
     totalMarketValue: accounts.reduce((sum, account) => sum + account.total_market_value, 0),
+    totalDayChange: accounts.reduce((sum, account) => sum + account.total_day_change, 0),
   };
   const totalProfit = totals.totalMarketValue - totals.totalInvested;
 
@@ -192,9 +209,12 @@ export async function getAccountAnalysis(supabase, userId, priceSource = 'stock_
     const normalized = {};
     Object.entries(rawBreakdown).forEach(([assetType, values]) => {
       const key = canonicalizeAssetType(assetType);
+      const prevMarketValue = values.marketValue - values.dayChange;
       normalized[key] = {
         invested: toNumber(values.invested),
         marketValue: toNumber(values.marketValue),
+        dayChange: toNumber(values.dayChange),
+        dayChangePercent: prevMarketValue > 1e-8 ? (values.dayChange / prevMarketValue) * 100 : 0,
       };
     });
     return normalized;
@@ -209,6 +229,8 @@ export async function getAccountAnalysis(supabase, userId, priceSource = 'stock_
     total_market_value: account.total_market_value,
     profit: account.profit,
     profitPercent: account.profitPercent,
+    dayChange: account.total_day_change,
+    dayChangePercent: account.dayChangePercent,
     breakdown: normalizeBreakdown(account.breakdown),
   }));
 
@@ -219,9 +241,11 @@ export async function getAccountAnalysis(supabase, userId, priceSource = 'stock_
         total_invested: otherAccountsSource.total_invested,
         totalMarketValue: otherAccountsSource.total_market_value,
         total_market_value: otherAccountsSource.total_market_value,
+        dayChange: otherAccountsSource.total_day_change,
+        dayChangePercent: otherAccountsSource.dayChangePercent,
         breakdown: normalizeBreakdown(otherAccountsSource.breakdown),
       }
-    : { totalInvested: 0, total_invested: 0, totalMarketValue: 0, total_market_value: 0, breakdown: {} };
+    : { totalInvested: 0, total_invested: 0, totalMarketValue: 0, total_market_value: 0, dayChange: 0, dayChangePercent: 0, breakdown: {} };
 
   return {
     accountWise: normalizedAccounts,
@@ -233,6 +257,8 @@ export async function getAccountAnalysis(supabase, userId, priceSource = 'stock_
       marketValue: totals.totalMarketValue,
       profit: totalProfit,
       profitPercent: totals.totalInvested > 1e-8 ? (totalProfit / totals.totalInvested) * 100 : 0,
+      dayChange: totals.totalDayChange,
+      dayChangePercent: (totals.totalMarketValue - totals.totalDayChange) > 1e-8 ? (totals.totalDayChange / (totals.totalMarketValue - totals.totalDayChange)) * 100 : 0,
     },
     timestamp: new Date().toISOString(),
   };

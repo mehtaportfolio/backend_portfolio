@@ -36,18 +36,27 @@ export function buildCMPMaps(data) {
   const stockData = data.stock_mapping?.data || data.stock_master?.data || [];
 
   (stockData).forEach((m) => {
-    stockCmpMap.set(String(m.stock_name).trim(), toNumber(m.cmp));
-    stockLcpMap.set(String(m.stock_name).trim(), toNumber(m.lcp));
+    const name = String(m.stock_name || '').trim().toUpperCase();
+    if (name) {
+      stockCmpMap.set(name, toNumber(m.cmp));
+      stockLcpMap.set(name, toNumber(m.lcp));
+    }
   });
 
   (data.fund_master?.data || []).forEach((m) => {
-    fundCmpMap.set(String(m.fund_short_name).trim(), toNumber(m.cmp));
-    fundLcpMap.set(String(m.fund_short_name).trim(), toNumber(m.lcp));
+    const name = String(m.fund_short_name || '').trim().toUpperCase();
+    if (name) {
+      fundCmpMap.set(name, toNumber(m.cmp));
+      fundLcpMap.set(name, toNumber(m.lcp));
+    }
   });
 
   (data.nps_pension_fund_master?.data || []).forEach((m) => {
-    npsCmpMap.set(String(m.scheme_name).trim(), toNumber(m.cmp));
-    npsLcpMap.set(String(m.scheme_name).trim(), toNumber(m.lcp));
+    const name = String(m.scheme_name || '').trim().toUpperCase();
+    if (name) {
+      npsCmpMap.set(name, toNumber(m.cmp));
+      npsLcpMap.set(name, toNumber(m.lcp));
+    }
   });
 
   return { stockCmpMap, stockLcpMap, fundCmpMap, fundLcpMap, npsCmpMap, npsLcpMap };
@@ -90,12 +99,13 @@ export async function getDashboardAssetAllocation(supabase, userId, priceSource 
     let etfDayChange = 0;
     if (stockData.holdings) {
       stockData.holdings.forEach((holding) => {
-        const lcp = stockLcpMap.get(holding.stockName) || 0;
+        const name = String(holding.stockName || '').trim().toUpperCase();
+        const lcp = stockLcpMap.get(name) || 0;
         const dayChange = holding.quantity * (holding.cmp - lcp);
         
         const isETF = (holding.equityType || '').toLowerCase() === 'etf' || 
                       holding.accountType === 'ETF' || 
-                      ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => String(holding.stockName || '').toUpperCase().includes(p));
+                      ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => name.includes(p));
         
         const isStock = !isETF && ((holding.equityType || '').toLowerCase() === 'stocks' || ['free', 'regular', 'esop'].includes((holding.accountType || '').toLowerCase()));
         
@@ -110,7 +120,8 @@ export async function getDashboardAssetAllocation(supabase, userId, priceSource 
     let mfDayChange = 0;
     if (mfData.holdings) {
       mfData.holdings.forEach((holding) => {
-        const lcp = fundLcpMap.get(holding.fundName) || 0;
+        const name = String(holding.fundName || '').trim().toUpperCase();
+        const lcp = fundLcpMap.get(name) || 0;
         const dayChange = holding.units * (holding.cmp - lcp);
         mfDayChange += dayChange;
       });
@@ -133,7 +144,8 @@ export async function getDashboardAssetAllocation(supabase, userId, priceSource 
     let npsDayChange = 0;
     if (npsData.holdings) {
       npsData.holdings.forEach((holding) => {
-        const lcp = npsLcpMap.get(holding.schemeName) || 0;
+        const name = String(holding.schemeName || '').trim().toUpperCase();
+        const lcp = npsLcpMap.get(name) || 0;
         const dayChange = holding.units * (holding.cmp - lcp);
         npsDayChange += dayChange;
       });

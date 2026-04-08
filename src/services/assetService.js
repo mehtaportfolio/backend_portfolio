@@ -361,15 +361,29 @@ export async function getPPFData() {
     }
 
 
-    // Group by account
-    const byAccount = {};
+    // Group by type and account
+    const byType = {
+      ppf: {},
+      fd: {}
+    };
+    const typeSummaries = {
+      ppf: { invested: 0, interest: 0, current: 0 },
+      fd: { invested: 0, interest: 0, current: 0 }
+    };
     let totalInvested = 0;
     let totalInterest = 0;
 
     (data || []).forEach((txn) => {
+      const type = String(txn.account_type || 'ppf').toLowerCase();
       const account = txn.account_name || 'Unknown';
-      if (!byAccount[account]) {
-        byAccount[account] = {
+      
+      if (!byType[type]) {
+        byType[type] = {};
+        typeSummaries[type] = { invested: 0, interest: 0, current: 0 };
+      }
+      
+      if (!byType[type][account]) {
+        byType[type][account] = {
           transactions: [],
           invested: 0,
           interest: 0,
@@ -378,28 +392,38 @@ export async function getPPFData() {
         };
       }
 
-      byAccount[account].transactions.push(txn);
+      byType[type][account].transactions.push(txn);
 
       const amount = toNumber(txn.amount);
       const tt = String(txn.transaction_type || '').toLowerCase();
 
       if (tt.includes('deposit')) {
-        byAccount[account].invested += amount;
+        byType[type][account].invested += amount;
+        typeSummaries[type].invested += amount;
         totalInvested += amount;
       } else if (tt.includes('interest')) {
-        byAccount[account].interest += amount;
+        byType[type][account].interest += amount;
+        typeSummaries[type].interest += amount;
         totalInterest += amount;
+      } else if (tt.includes('withdrawal')) {
+        byType[type][account].invested -= amount;
+        typeSummaries[type].invested -= amount;
+        totalInvested -= amount;
       }
     });
 
-    // Calculate current balance
-    Object.values(byAccount).forEach((account) => {
-      account.current = account.invested + account.interest;
+    // Calculate current balance for all accounts and types
+    Object.keys(byType).forEach((type) => {
+      Object.values(byType[type]).forEach((account) => {
+        account.current = account.invested + account.interest;
+      });
+      typeSummaries[type].current = typeSummaries[type].invested + typeSummaries[type].interest;
     });
 
     return {
       transactions: data || [],
-      byAccount,
+      byType,
+      typeSummaries,
       summary: {
         totalInvested,
         totalInterest,

@@ -1,7 +1,9 @@
 import express from 'express';
 import { getAnalysisDashboard, getAnalysisSummary, getAnalysisFreeStocks, getTopMutualFunds } from '../services/analysisService.js';
 import { getAccountAnalysis } from '../services/accountAnalysisService.js';
+import { getFixedAssetTotals } from '../services/fixedAssetService.js';
 import { createClient } from '@supabase/supabase-js';
+import authMiddleware from '../middleware/auth.js';
 import { cacheMiddleware } from '../middleware/cache.js';
 
 const router = express.Router();
@@ -59,6 +61,21 @@ router.get('/free-stocks', cacheMiddleware(ANALYSIS_CACHE_TTL), async (req, res,
     
     const data = await getAnalysisFreeStocks(userId, priceSource);
     res.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Fixed Assets for Home Page (Bank, EPF, PPF, FD)
+router.get('/fixed-assets', authMiddleware, cacheMiddleware(ANALYSIS_CACHE_TTL), async (req, res, next) => {
+  try {
+    const userId = req.userId || req.query.userId || ['PM', 'PDM', 'PSM', 'BDM'];
+    const data = await getFixedAssetTotals(supabase, userId);
+    res.json({
+      success: true,
+      data,
+      cache: res.getHeader('X-Cache'),
+    });
   } catch (error) {
     next(error);
   }

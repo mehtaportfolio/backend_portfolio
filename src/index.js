@@ -19,6 +19,13 @@ import cacheMiddleware from './middleware/cache.js';
 // -------------------------------------------------------------
 // Initialize Express app
 const app = express();
+
+// Simple request logging middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 const PORT = process.env.PORT || 3001;
 

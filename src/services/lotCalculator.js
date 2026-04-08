@@ -72,20 +72,21 @@ export function calculateStockLots(transactions = [], cmpMap = new Map()) {
   const holdings = [];
 
   (transactions || []).forEach((txn) => {
-    if (!txn.stock_name) return;
+    const stockNameRaw = String(txn.stock_name || '').trim();
+    if (!stockNameRaw) return;
     if (txn.sell_date) return; // Only open positions
 
     const accountName = String(txn.account_name || '').trim();
     const accountType = String(txn.account_type || '').trim().toUpperCase();
     const equityType = String(txn.equity_type || '').trim().toLowerCase();
-    const stockName = String(txn.stock_name).trim();
+    const stockName = stockNameRaw.toUpperCase();
 
     const key = `${accountName}||${accountType}||${equityType}||${stockName}`;
     const entry = aggregated.get(key) || {
       accountName,
       accountType,
       equityType,
-      stockName,
+      stockName: stockNameRaw, // Keep original case for display if needed
       quantity: 0,
       invested: 0,
     };
@@ -97,7 +98,7 @@ export function calculateStockLots(transactions = [], cmpMap = new Map()) {
 
   aggregated.forEach((entry) => {
     if (!entry.quantity) return;
-    const cmp = cmpMap.get(entry.stockName) || 0;
+    const cmp = cmpMap.get(entry.stockName.toUpperCase()) || 0;
     const marketValue = entry.quantity * cmp;
     const invested = entry.invested;
     const profit = marketValue - invested;
@@ -118,11 +119,13 @@ export function calculateStockLots(transactions = [], cmpMap = new Map()) {
 
     holdings.push(holding);
 
+    const normalizedName = entry.stockName.toUpperCase();
     const isETF = entry.equityType === 'etf' || 
                   entry.accountType === 'ETF' || 
-                  ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => entry.stockName.toUpperCase().includes(p));
+                  ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => normalizedName.includes(p));
     
-    const isStock = !isETF && (entry.equityType === 'stocks' || ['free', 'regular', 'esop'].includes(entry.accountType.toLowerCase()));
+    // Inclusive stock check - if it's not an ETF, it's a stock
+    const isStock = !isETF;
 
     if (isETF) {
       etfMarketValue += marketValue;
@@ -181,7 +184,7 @@ export function calculateMFLots(transactions = [], cmpMap = new Map()) {
 
   mfTransactions.forEach((txn) => {
     const { fundName, accountName, type, units, nav, effectiveDate, index } = txn;
-    const fundKey = `${fundName}||${accountName}`;
+    const fundKey = `${fundName.toUpperCase()}||${accountName}`;
     if (!lotsByFund.has(fundKey)) {
       lotsByFund.set(fundKey, []);
     }
@@ -194,6 +197,7 @@ export function calculateMFLots(transactions = [], cmpMap = new Map()) {
         date: effectiveDate,
         order: effectiveDate ? effectiveDate.getTime() : Number.POSITIVE_INFINITY,
         sequence: index,
+        fundNameOriginal: fundName // Keep original for display
       });
       return;
     }
@@ -207,14 +211,14 @@ export function calculateMFLots(transactions = [], cmpMap = new Map()) {
   });
 
   lotsByFund.forEach((lots, key) => {
-    const [fundNameRaw, accountName] = key.split('||');
-    const fundName = fundNameRaw?.trim() || '';
+    const [fundNameKey, accountName] = key.split('||');
     const openLots = lots.filter((lot) => lot.units > 1e-8);
     if (!openLots.length) return;
 
+    const fundName = openLots[0].fundNameOriginal;
     const totalUnits = openLots.reduce((sum, lot) => sum + lot.units, 0);
     const totalCost = openLots.reduce((sum, lot) => sum + Math.max(lot.cost, 0), 0);
-    const cmp = cmpMap.get(fundName) || 0;
+    const cmp = cmpMap.get(fundNameKey) || 0;
     const marketValue = totalUnits * cmp;
     const profit = marketValue - totalCost;
     const profitPercent = totalCost > 1e-8 ? (profit / totalCost) * 100 : 0;
