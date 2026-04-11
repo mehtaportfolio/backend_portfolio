@@ -83,6 +83,7 @@ const { default: notificationRoutes } = await import('./routes/notifications.js'
 const { default: dividendRoutes } = await import('./routes/dividend.js');
 const { default: fundsRoutes } = await import('./routes/funds.js');
 const { default: casRoutes } = await import('./routes/cas.js');
+const { default: zerodhaRoutes } = await import('./routes/zerodha.js');
 const { sendAngelOneStatusNotification } = await import('./services/notificationService.js');
 const { initializeStockMapping } = await import('./db/initStockMapping.js');
 
@@ -97,6 +98,11 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/dividend', dividendRoutes);
 app.use('/funds', fundsRoutes);
 app.use('/api/cas', casRoutes);
+app.use('/api/zerodha', zerodhaRoutes);
+
+// ✅ Add direct kite callback route (Zerodha's expected redirect URL)
+const { zerodhaCallback } = await import('./services/zerodhaService.js');
+app.get('/kite/callback', zerodhaCallback);
 
 // 🔄 Cache invalidation endpoints for various asset types (from server.old.js)
 const cacheInvalidationHandler = async (req, res) => {
@@ -173,6 +179,30 @@ app.post('/api/render/deploy', async (req, res) => {
 });
 
 // 🔹 Proxy endpoints for Angel One services
+app.get('/api/angel-one-health', async (req, res) => {
+  try {
+    const response = await axios.get('https://mehta-ao-prices.onrender.com/health', {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    
+    res.json({
+      status: 'success',
+      message: 'Angel One server is healthy',
+      data: response.data
+    });
+  } catch (error) {
+    console.error('❌ Error calling Angel One health check:', error.message);
+    res.status(error.response?.status || 500).json({
+      status: 'error',
+      message: error.message || 'Failed to reach Angel One server',
+      error: error.response?.data || error.message
+    });
+  }
+});
+
 app.get('/refresh-stocks', async (req, res) => {
   try {
     const response = await axios.get('https://mehta-ao-prices.onrender.com/refresh-stocks', {
