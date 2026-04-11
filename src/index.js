@@ -82,6 +82,7 @@ const { default: cacheRoutes } = await import('./routes/cache.js');
 const { default: notificationRoutes } = await import('./routes/notifications.js');
 const { default: dividendRoutes } = await import('./routes/dividend.js');
 const { default: fundsRoutes } = await import('./routes/funds.js');
+const { default: casRoutes } = await import('./routes/cas.js');
 const { sendAngelOneStatusNotification } = await import('./services/notificationService.js');
 const { initializeStockMapping } = await import('./db/initStockMapping.js');
 
@@ -95,6 +96,7 @@ app.use('/api/cache', cacheRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dividend', dividendRoutes);
 app.use('/funds', fundsRoutes);
+app.use('/api/cas', casRoutes);
 
 // 🔄 Cache invalidation endpoints for various asset types (from server.old.js)
 const cacheInvalidationHandler = async (req, res) => {
