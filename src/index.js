@@ -1,3 +1,93 @@
+// ✅ Polyfill browser-only objects for pdfjs-dist in Node environment
+if (typeof global.window === 'undefined') {
+  global.window = global;
+}
+if (typeof global.self === 'undefined') {
+  global.self = global;
+}
+if (typeof global.navigator === 'undefined') {
+  global.navigator = { userAgent: 'node' };
+}
+if (typeof global.document === 'undefined') {
+  global.document = {
+    createElement: () => ({
+      getContext: () => ({})
+    })
+  };
+}
+if (typeof global.DOMMatrix === 'undefined') {
+  global.DOMMatrix = class DOMMatrix {
+    constructor() {
+      this.m11 = 1; this.m12 = 0; this.m13 = 0; this.m14 = 0;
+      this.m21 = 0; this.m22 = 1; this.m23 = 0; this.m24 = 0;
+      this.m31 = 0; this.m32 = 0; this.m33 = 1; this.m34 = 0;
+      this.m41 = 0; this.m42 = 0; this.m43 = 0; this.m44 = 1;
+    }
+  };
+}
+if (typeof global.ImageData === 'undefined') {
+  global.ImageData = class ImageData {
+    constructor() {}
+  };
+}
+if (typeof global.Path2D === 'undefined') {
+  global.Path2D = class Path2D {
+    constructor() {}
+  };
+}
+if (typeof global.CanvasRenderingContext2D === 'undefined') {
+  global.CanvasRenderingContext2D = class CanvasRenderingContext2D {
+    constructor() {}
+  };
+}
+if (typeof global.HTMLCanvasElement === 'undefined') {
+  global.HTMLCanvasElement = class HTMLCanvasElement {
+    constructor() {}
+  };
+}
+if (typeof global.DOMPoint === 'undefined') {
+  global.DOMPoint = class DOMPoint {
+    constructor() {}
+  };
+}
+if (typeof global.DOMRect === 'undefined') {
+  global.DOMRect = class DOMRect {
+    constructor() {}
+  };
+}
+if (typeof global.HTMLElement === 'undefined') {
+  global.HTMLElement = class HTMLElement {
+    constructor() {}
+  };
+}
+if (typeof global.Image === 'undefined') {
+  global.Image = class Image {
+    constructor() {}
+  };
+}
+if (typeof global.OffscreenCanvas === 'undefined') {
+  global.OffscreenCanvas = class OffscreenCanvas {
+    constructor() {}
+    getContext() { return {}; }
+  };
+}
+if (typeof global.Blob === 'undefined') {
+  // Use global Blob if available (Node 18+), else mock it
+  if (typeof Blob === 'undefined') {
+    global.Blob = class Blob {
+      constructor() {}
+    };
+  } else {
+    global.Blob = Blob;
+  }
+}
+if (typeof global.XMLSerializer === 'undefined') {
+  global.XMLSerializer = class XMLSerializer {
+    constructor() {}
+    serializeToString() { return ''; }
+  };
+}
+
 // ✅ Load environment variables FIRST (before anything else)
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
