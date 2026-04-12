@@ -2,6 +2,13 @@
 if (typeof global.window === 'undefined') {
   global.window = global;
 }
+global.process.browser = false;
+if (typeof global.location === 'undefined') {
+  global.location = { href: 'http://localhost', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost', port: '', pathname: '/', search: '', hash: '' };
+}
+if (typeof global.window.location === 'undefined') {
+  global.window.location = global.location;
+}
 if (typeof global.self === 'undefined') {
   global.self = global;
 }

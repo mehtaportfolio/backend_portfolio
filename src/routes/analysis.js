@@ -2,14 +2,13 @@ import express from 'express';
 import { getAnalysisDashboard, getAnalysisSummary, getAnalysisFreeStocks, getTopMutualFunds } from '../services/analysisService.js';
 import { getAccountAnalysis } from '../services/accountAnalysisService.js';
 import { getFixedAssetTotals } from '../services/fixedAssetService.js';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../db/supabaseClient.js';
 import authMiddleware from '../middleware/auth.js';
 import { cacheMiddleware } from '../middleware/cache.js';
 
 const router = express.Router();
 
 const ANALYSIS_CACHE_TTL = parseInt(process.env.CACHE_TTL_ANALYSIS || '5', 10);
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
 // Analysis Dashboard - Account-wise stocks, top gainers/losers
 router.get('/dashboard', cacheMiddleware(ANALYSIS_CACHE_TTL), async (req, res, next) => {

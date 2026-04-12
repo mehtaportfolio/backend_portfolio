@@ -5,17 +5,11 @@
  */
 
 import express from 'express';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../db/supabaseClient.js';
 import { cacheMiddleware } from '../middleware/cache.js';
 import { getDashboardAssetAllocation, getDashboardSummary } from '../services/dashboardService.js';
 
 const router = express.Router();
-
-// Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
 
 const CACHE_TTL = parseInt(process.env.CACHE_TTL_DASHBOARD || '5', 10);
 
