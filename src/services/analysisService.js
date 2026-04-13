@@ -254,20 +254,24 @@ export async function getAnalysisDashboard(userId = 'all', priceSource = 'stock_
     // Build CMP map with fallback logic
     const cmpMap = new Map();
     (priceData || []).forEach((m) => {
-      cmpMap.set(m.stock_name, toNumber(m.cmp));
+      if (m.stock_name) {
+        cmpMap.set(String(m.stock_name).trim().toUpperCase(), toNumber(m.cmp));
+      }
     });
     // For angel one (stock_mapping), fallback to stock_master if CMP is missing
     if (priceTable === 'stock_mapping') {
       (stockMaster || []).forEach((m) => {
-        if (!cmpMap.get(m.stock_name) || cmpMap.get(m.stock_name) === 0) {
-          cmpMap.set(m.stock_name, toNumber(m.cmp));
+        const normalizedName = String(m.stock_name || '').trim().toUpperCase();
+        if (!cmpMap.get(normalizedName) || cmpMap.get(normalizedName) === 0) {
+          cmpMap.set(normalizedName, toNumber(m.cmp));
         }
       });
     } else {
       // If we're using stock_master directly, use it for CMP
       (stockMaster || []).forEach((m) => {
-        if (!cmpMap.get(m.stock_name)) {
-          cmpMap.set(m.stock_name, toNumber(m.cmp));
+        const normalizedName = String(m.stock_name || '').trim().toUpperCase();
+        if (!cmpMap.get(normalizedName)) {
+          cmpMap.set(normalizedName, toNumber(m.cmp));
         }
       });
     }
@@ -330,7 +334,8 @@ export async function getAnalysisDashboard(userId = 'all', priceSource = 'stock_
           (acc, txn) => {
             const quantity = toNumber(txn.quantity);
             const invested = quantity * toNumber(txn.buy_price);
-            const cmp = cmpMap.get(txn.stock_name) || 0;
+            const normalizedName = String(txn.stock_name || '').trim().toUpperCase();
+            const cmp = cmpMap.get(normalizedName) || 0;
             return {
               invested: acc.invested + invested,
               marketValue: acc.marketValue + quantity * cmp,
@@ -514,7 +519,8 @@ export async function getAnalysisDashboard(userId = 'all', priceSource = 'stock_
 
       let invested = 0;
       let marketValue = 0;
-      const cmp = cmpMap.get(stockName) || 0;
+      const normalizedName = String(stockName || '').trim().toUpperCase();
+      const cmp = cmpMap.get(normalizedName) || 0;
       openTxns.forEach((txn) => {
         const quantity = toNumber(txn.quantity);
         const price = toNumber(txn.buy_price);
@@ -617,7 +623,7 @@ export async function getAnalysisSummary(userId = 'all', priceSource = 'stock_ma
     
     // First, add price data from the selected price table (stock_mapping or stock_master CMP/LCP columns)
     (priceData || []).forEach((m) => {
-      const stockName = String(m.stock_name || '').trim();
+      const stockName = String(m.stock_name || '').trim().toUpperCase();
       const cmp = toNumber(m.cmp);
       const lcp = toNumber(m.lcp);
       cmpMap.set(stockName, cmp);
@@ -627,23 +633,25 @@ export async function getAnalysisSummary(userId = 'all', priceSource = 'stock_ma
     // For angel one (stock_mapping), add fallback from stock_master if CMP/LCP is missing
     if (priceTable === 'stock_mapping') {
       stockMasterMap.forEach((row, stockName) => {
-        if (!cmpMap.get(stockName) || cmpMap.get(stockName) === 0) {
+        const normalizedName = String(stockName || '').trim().toUpperCase();
+        if (!cmpMap.get(normalizedName) || cmpMap.get(normalizedName) === 0) {
           const cmp = toNumber(row.cmp);
-          if (cmp > 0) cmpMap.set(stockName, cmp);
+          if (cmp > 0) cmpMap.set(normalizedName, cmp);
         }
-        if (!lcpMap.get(stockName) || lcpMap.get(stockName) === 0) {
+        if (!lcpMap.get(normalizedName) || lcpMap.get(normalizedName) === 0) {
           const lcp = toNumber(row.lcp);
-          if (lcp > 0) lcpMap.set(stockName, lcp);
+          if (lcp > 0) lcpMap.set(normalizedName, lcp);
         }
       });
     } else {
       // If we're using stock_master directly, populate from stockMasterMap
       stockMasterMap.forEach((row, stockName) => {
-        if (!cmpMap.has(stockName)) {
-          cmpMap.set(stockName, toNumber(row.cmp));
+        const normalizedName = String(stockName || '').trim().toUpperCase();
+        if (!cmpMap.has(normalizedName)) {
+          cmpMap.set(normalizedName, toNumber(row.cmp));
         }
-        if (!lcpMap.has(stockName)) {
-          lcpMap.set(stockName, toNumber(row.lcp));
+        if (!lcpMap.has(normalizedName)) {
+          lcpMap.set(normalizedName, toNumber(row.lcp));
         }
       });
     }
@@ -683,8 +691,10 @@ export async function getAnalysisSummary(userId = 'all', priceSource = 'stock_ma
       const accountName = txn.account_name || 'Unknown';
       const accountType = txn.account_type || 'STOCK';
       const masterInfo = stockMasterMap.get(stockName) || {};
-      const cmp = cmpMap.get(stockName) || 0;
-      const lcp = lcpMap.get(stockName) || 0;
+      
+      const normalizedStockNameForMap = stockName.toUpperCase();
+      const cmp = cmpMap.get(normalizedStockNameForMap) || 0;
+      const lcp = lcpMap.get(normalizedStockNameForMap) || 0;
       const investedAmount = quantity * price;
       const marketValue = quantity * cmp;
       const unrealizedGain = marketValue - investedAmount;
@@ -1139,6 +1149,96 @@ const normalizeAccountTypeForFreeStocks = (accountType, accountName) => {
   return normalizedType || 'REGULAR';
 };
 
+export async function getEarningData(userId = 'all') {
+  try {
+    const fetchPromises = [
+      fetchAllRows(supabase, 'stock_transactions', {
+        select: 'stock_name, quantity, buy_price, sell_price, sell_date, account_name, account_type',
+        filters: [
+          ...(userId !== 'all' ? [(q) => q.in('account_name', Array.isArray(userId) ? userId : [userId])] : [])
+        ]
+      }),
+      fetchAllRows(supabase, 'account_cashflows', {
+        select: 'stock_name, amount, transaction_type, date, account_name',
+        filters: [
+          (q) => q.eq('transaction_type', 'dividend'),
+          ...(userId !== 'all' ? [(q) => q.in('account_name', Array.isArray(userId) ? userId : [userId])] : [])
+        ]
+      })
+    ];
+
+    const [{ data: allTxns }, { data: dividendTxns }] = await Promise.all(fetchPromises);
+
+    // Grouping key: stock_name + account_type
+    const earningMap = new Map();
+
+    // Process all transactions
+    (allTxns || []).forEach((txn) => {
+      const name = String(txn.stock_name || '').trim();
+      if (!name) return;
+
+      const accName = (txn.account_name || '').trim();
+      const accType = normalizeAccountTypeForFreeStocks(txn.account_type, accName);
+      const key = `${name}::${accType}`;
+
+      if (!earningMap.has(key)) {
+        earningMap.set(key, { 
+          stock_name: name, 
+          account_type: accType,
+          profit: 0, 
+          dividend: 0, 
+          current_investment: 0 
+        });
+      }
+
+      const entry = earningMap.get(key);
+      const quantity = toNumber(txn.quantity);
+      const buyPrice = toNumber(txn.buy_price);
+
+      if (txn.sell_date && txn.sell_price !== null) {
+        // Realized profit
+        const sellPrice = toNumber(txn.sell_price);
+        entry.profit += (sellPrice - buyPrice) * quantity;
+      } else if (!txn.sell_date) {
+        // Open investment
+        entry.current_investment += buyPrice * quantity;
+      }
+    });
+
+    // Process dividends
+    (dividendTxns || []).forEach((txn) => {
+      const name = String(txn.stock_name || '').trim();
+      if (!name) return;
+
+      const accName = (txn.account_name || '').trim();
+      const accType = normalizeAccountTypeForFreeStocks(null, accName);
+      const key = `${name}::${accType}`;
+
+      // Only add dividend if the stock exists in the earningMap (from stock_transactions)
+      if (earningMap.has(key)) {
+        earningMap.get(key).dividend += toNumber(txn.amount);
+      } else {
+        // If dividend exists but no stock_transactions for this type (unlikely but possible)
+        // Check if we should add it anyway?
+        // Let's at least check if the stock exists in any other account type
+        const stockExistsInAnyType = Array.from(earningMap.values()).some(e => e.stock_name === name);
+        if (stockExistsInAnyType) {
+          // Find first entry for this stock
+          const entry = Array.from(earningMap.values()).find(e => e.stock_name === name);
+          if (entry) entry.dividend += toNumber(txn.amount);
+        }
+      }
+    });
+
+    return Array.from(earningMap.values()).sort((a, b) => 
+      (b.profit + b.dividend + b.current_investment) - (a.profit + a.dividend + a.current_investment)
+    );
+  } catch (error) {
+    console.error('Earning Data service error:', error);
+    throw error;
+  }
+}
+
 export async function getAnalysisFreeStocks(userId = 'all', priceSource = 'stock_master') {
   try {
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
@@ -1183,20 +1283,24 @@ export async function getAnalysisFreeStocks(userId = 'all', priceSource = 'stock
     // Build CMP map with fallback logic
     const cmpMap = new Map();
     (priceData || []).forEach((m) => {
-      cmpMap.set(m.stock_name, toNumber(m.cmp));
+      if (m.stock_name) {
+        cmpMap.set(String(m.stock_name).trim().toUpperCase(), toNumber(m.cmp));
+      }
     });
     // For angel one (stock_mapping), fallback to stock_master if CMP is missing
     if (priceTable === 'stock_mapping') {
       (stockMaster || []).forEach((m) => {
-        if (!cmpMap.get(m.stock_name) || cmpMap.get(m.stock_name) === 0) {
-          cmpMap.set(m.stock_name, toNumber(m.cmp));
+        const normalizedName = String(m.stock_name || '').trim().toUpperCase();
+        if (!cmpMap.get(normalizedName) || cmpMap.get(normalizedName) === 0) {
+          cmpMap.set(normalizedName, toNumber(m.cmp));
         }
       });
     } else {
       // If we're using stock_master directly, use it for CMP
       (stockMaster || []).forEach((m) => {
-        if (!cmpMap.get(m.stock_name)) {
-          cmpMap.set(m.stock_name, toNumber(m.cmp));
+        const normalizedName = String(m.stock_name || '').trim().toUpperCase();
+        if (!cmpMap.get(normalizedName)) {
+          cmpMap.set(normalizedName, toNumber(m.cmp));
         }
       });
     }
@@ -1222,7 +1326,9 @@ export async function getAnalysisFreeStocks(userId = 'all', priceSource = 'stock
       let totalRegularUnits = 0;
       let totalRegularInvested = 0;
       let totalRegularMV = 0;
-      const cmp = cmpMap.get(stockName) || 0;
+      
+      const normalizedStockName = stockName.toUpperCase();
+      const cmp = cmpMap.get(normalizedStockName) || 0;
 
       // Prepare XIRR cashflows including current market value
       const getXirrFlows = (txns) => {

@@ -158,22 +158,51 @@ async function fetchAndAggregateTrades(req, res) {
     });
 
     // Fetch trades
+    console.log(`🔍 Fetching trades for ${accountId}...`);
     const trades = await kite.getTrades();
+    console.log(`✅ Fetched ${trades.length} trades for ${accountId}`);
 
     // Get today's date in YYYY-MM-DD
     const today = new Date().toISOString().split("T")[0];
+    console.log(`📅 Syncing for today: ${today}`);
 
     // Filter: DELIVERY BUY trades for today
-    const deliveryBuyToday = trades.filter(t => 
-      t.product === "CNC" && 
-      t.transaction_type === "BUY" && 
-      t.trade_date && t.trade_date.startsWith(today)
-    );
+    const deliveryBuyToday = trades.filter(t => {
+      const isCNC = t.product?.toUpperCase() === "CNC";
+      const isBUY = t.transaction_type?.toUpperCase() === "BUY";
+      
+      const ts = t.fill_timestamp || t.exchange_timestamp;
+      if (!ts) return false;
+      
+      // Parse the trade date into YYYY-MM-DD format
+      let tradeDateStr;
+      try {
+        tradeDateStr = new Date(ts).toISOString().split("T")[0];
+      } catch (err) {
+        console.error("Date parse error for trade:", ts);
+        return false;
+      }
+      
+      return isCNC && isBUY && tradeDateStr === today;
+    });
 
     if (deliveryBuyToday.length === 0) {
+      console.log(`ℹ️ No delivery buy trades found today for ${accountId} out of ${trades.length} total trades`);
+      const firstTradeStr = trades.length > 0 ? 
+        `[Prod: ${trades[0].product}, Type: ${trades[0].transaction_type}, Fill: ${trades[0].fill_timestamp}, Exch: ${trades[0].exchange_timestamp}]` : 
+        "None";
+
       return res.json({ 
-        message: `No delivery buy trades found today for ${accountId}`,
-        data: [] 
+        message: `No CNC BUY trades found for today (${today}) in ${accountId}. Total trades found: ${trades.length}. First trade: ${firstTradeStr}`,
+        data: [],
+        debug: trades.length > 0 ? {
+          firstTrade: {
+            product: trades[0].product,
+            type: trades[0].transaction_type,
+            fill: trades[0].fill_timestamp,
+            exchange: trades[0].exchange_timestamp
+          }
+        } : null
       });
     }
 
@@ -184,23 +213,31 @@ async function fetchAndAggregateTrades(req, res) {
       if (!aggregation[symbol]) {
         aggregation[symbol] = {
           symbol: symbol,
+          isin: t.isin || null,
           total_qty: 0,
           total_cost: 0,
           account_id: accountId,
-          date: today
+          date: today,
+          broker: "Zerodha",
+          product: t.product || "CNC",
+          exchange: t.exchange || "NSE"
         };
       }
-      aggregation[symbol].total_qty += t.quantity;
-      aggregation[symbol].total_cost += (t.quantity * t.average_price);
+      aggregation[symbol].total_qty += Number(t.quantity);
+      aggregation[symbol].total_cost += (Number(t.quantity) * Number(t.average_price));
     });
 
     // Calculate final weighted average and prepare for insert
     const finalData = Object.values(aggregation).map(item => ({
-      symbol: item.symbol,
-      quantity: item.total_qty,
-      avg_price: parseFloat((item.total_cost / item.total_qty).toFixed(2)),
+      broker: item.broker,
       account_id: item.account_id,
-      trade_date: item.date
+      symbol: item.symbol,
+      isin: item.isin,
+      quantity: item.total_qty,
+      average_price: parseFloat((item.total_cost / item.total_qty).toFixed(2)),
+      product: item.product,
+      exchange: item.exchange,
+      position_date: item.date
     }));
 
     // Insert into equity_positions
@@ -209,8 +246,8 @@ async function fetchAndAggregateTrades(req, res) {
       .insert(finalData);
 
     if (insertError) {
-      console.error("❌ Insert Error:", insertError.message);
-      return res.status(500).json({ error: "Failed to save aggregated trades" });
+      console.error("❌ Insert Error:", insertError.message, "Data:", finalData);
+      return res.status(500).json({ error: "Failed to save aggregated trades: " + insertError.message });
     }
 
     console.log(`✅ Aggregated ${finalData.length} stocks for ${accountId}`);
@@ -221,7 +258,7 @@ async function fetchAndAggregateTrades(req, res) {
 
   } catch (err) {
     console.error("❌ Fetch/Aggregate error:", err.message);
-    res.status(500).json({ error: "Aggregation failed" });
+    res.status(500).json({ error: "Aggregation failed: " + err.message });
   }
 }
 

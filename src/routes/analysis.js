@@ -1,5 +1,5 @@
 import express from 'express';
-import { getAnalysisDashboard, getAnalysisSummary, getAnalysisFreeStocks, getTopMutualFunds } from '../services/analysisService.js';
+import { getAnalysisDashboard, getAnalysisSummary, getAnalysisFreeStocks, getTopMutualFunds, getEarningData } from '../services/analysisService.js';
 import { getAccountAnalysis } from '../services/accountAnalysisService.js';
 import { getFixedAssetTotals } from '../services/fixedAssetService.js';
 import { supabase } from '../db/supabaseClient.js';
@@ -59,6 +59,17 @@ router.get('/free-stocks', cacheMiddleware(ANALYSIS_CACHE_TTL), async (req, res,
     const priceSource = req.query.priceSource || 'stock_master';
     
     const data = await getAnalysisFreeStocks(userId, priceSource);
+    res.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Earning Data for Earning Tab
+router.get('/earning', cacheMiddleware(ANALYSIS_CACHE_TTL), async (req, res, next) => {
+  try {
+    const userId = req.userId || req.query.userId || ['PM', 'PDM', 'PSM', 'BDM'];
+    const data = await getEarningData(userId);
     res.json(data);
   } catch (error) {
     next(error);
