@@ -275,6 +275,43 @@ app.post('/api/render/deploy', async (req, res) => {
   }
 });
 
+// 🔹 Proxy endpoint to get Render deploy status
+app.get('/api/render/deploy/:serviceId/:deployId', async (req, res) => {
+  const { serviceId, deployId } = req.params;
+  const apiKey = req.query.apiKey;
+
+  if (!serviceId || !deployId) {
+    return res.status(400).json({ status: 'error', message: 'serviceId and deployId are required' });
+  }
+
+  const token = apiKey || process.env.RENDER_API_KEY;
+
+  if (!token) {
+    return res.status(401).json({ status: 'error', message: 'Render API key is missing' });
+  }
+
+  try {
+    const response = await axios.get(
+      `https://api.render.com/v1/services/${serviceId}/deploys/${deployId}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        }
+      }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    console.error(`❌ Error fetching Render deploy status for ${deployId}:`, error.message);
+    res.status(error.response?.status || 500).json({
+      status: 'error',
+      message: error.response?.data?.message || error.message || 'Failed to fetch deploy status',
+      error: error.response?.data
+    });
+  }
+});
+
 // 🔹 Proxy endpoints for Angel One services
 app.get('/api/angel-one-health', async (req, res) => {
   try {
@@ -320,6 +357,30 @@ app.get('/refresh-stocks', async (req, res) => {
     res.status(error.response?.status || 500).json({
       status: 'error',
       message: error.message || 'Failed to refresh Angel One stock list',
+      error: error.response?.data || error.message
+    });
+  }
+});
+
+app.post('/sync', async (req, res) => {
+  try {
+    const response = await axios.get('https://mehta-ao-prices.onrender.com/sync', {
+      timeout: 60000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    
+    res.json({
+      status: 'success',
+      message: response.data?.message || 'Angel One sync triggered successfully',
+      data: response.data
+    });
+  } catch (error) {
+    console.error('❌ Error calling Angel One sync:', error.message);
+    res.status(error.response?.status || 500).json({
+      status: 'error',
+      message: error.message || 'Failed to trigger Angel One sync',
       error: error.response?.data || error.message
     });
   }
