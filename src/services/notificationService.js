@@ -1,4 +1,5 @@
 import webpush from 'web-push';
+import axios from 'axios';
 import { supabase } from '../db/supabaseClient.js';
 import { getDashboardAssetAllocation } from './dashboardService.js';
 
@@ -7,8 +8,37 @@ const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
 const privateVapidKey = process.env.VAPID_PRIVATE_KEY;
 const vapidEmail = process.env.VAPID_EMAIL;
 
+// Telegram configuration
+const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+
 if (publicVapidKey && privateVapidKey && vapidEmail) {
   webpush.setVapidDetails(vapidEmail, publicVapidKey, privateVapidKey);
+}
+
+/**
+ * Send Telegram Alert
+ * @param {object} payload - Notification data
+ */
+export async function sendTelegramAlert(payload) {
+  if (!telegramBotToken || !telegramChatId) {
+    console.log('[Notification] Telegram Bot Token or Chat ID not configured, skipping Telegram alert');
+    return;
+  }
+
+  try {
+    const message = `*${payload.title}*\n\n${payload.body}`;
+    
+    await axios.post(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+      chat_id: telegramChatId,
+      text: message,
+      parse_mode: 'Markdown'
+    });
+
+    console.log('[Notification] Telegram alert sent successfully');
+  } catch (err) {
+    console.error('[Notification] Error sending Telegram alert:', err.response?.data || err.message);
+  }
 }
 
 const toNumber = (val) => {
@@ -252,6 +282,7 @@ export async function triggerPortfolioUpdate(force = false) {
     };
 
     await sendPushNotification(payload);
+    await sendTelegramAlert(payload);
     return { status: 'sent', data: payload };
   } catch (err) {
     console.error('Error triggering portfolio update:', err);
@@ -276,6 +307,7 @@ export async function sendAngelOneStatusNotification({ success, message, timesta
     };
 
     await sendPushNotification(payload);
+    await sendTelegramAlert(payload);
     return { status: 'sent', data: payload };
   } catch (err) {
     console.error('Error sending Angel One status notification:', err);
