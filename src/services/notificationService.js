@@ -231,6 +231,17 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
     // The user specifically wants Stock + ETF (Equity Button logic)
     const equityRows = result.rows.filter(r => r.assetType === 'Stock' || r.assetType === 'ETF');
     
+    const stockRows = result.rows.filter(r => r.assetType === 'Stock');
+    const etfRows = result.rows.filter(r => r.assetType === 'ETF');
+
+    const stockProfit = stockRows.reduce((sum, r) => sum + r.simpleProfit, 0);
+    const stockInvested = stockRows.reduce((sum, r) => sum + r.investedValue, 0);
+    const stockProfitPercent = stockInvested > 0 ? (stockProfit / stockInvested) * 100 : 0;
+
+    const etfProfit = etfRows.reduce((sum, r) => sum + r.simpleProfit, 0);
+    const etfInvested = etfRows.reduce((sum, r) => sum + r.investedValue, 0);
+    const etfProfitPercent = etfInvested > 0 ? (etfProfit / etfInvested) * 100 : 0;
+
     const totalMarketValue = equityRows.reduce((sum, r) => sum + r.marketValue, 0);
     const totalInvested = equityRows.reduce((sum, r) => sum + r.investedValue, 0);
     const totalProfit = totalMarketValue - totalInvested;
@@ -313,6 +324,8 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
     const displayStocks = highProfitRegularStocks.slice(0, 15);
 
     let notificationBody = `P&L: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(0)}%) | Day: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(0)}%)`;
+
+    notificationBody += `\nStocks : ${stockProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${stockProfitPercent.toFixed(1)}%) II ETF: ${etfProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${etfProfitPercent.toFixed(1)}%)`;
 
     if (displayStocks.length > 0) {
       notificationBody += `\n🔥 High Profit (${highProfitRegularStocks.length}):`;
