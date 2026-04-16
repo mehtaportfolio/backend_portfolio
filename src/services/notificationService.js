@@ -4,40 +4,85 @@ import { supabase } from '../db/supabaseClient.js';
 import { getDashboardAssetAllocation } from './dashboardService.js';
 
 // Initialize web-push with VAPID keys
-const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
-const privateVapidKey = process.env.VAPID_PRIVATE_KEY;
-const vapidEmail = process.env.VAPID_EMAIL;
+const initWebPush = () => {
+  const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
+  const privateVapidKey = process.env.VAPID_PRIVATE_KEY;
+  const vapidEmail = process.env.VAPID_EMAIL;
 
-// Telegram configuration
-const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
-const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+  if (publicVapidKey && privateVapidKey && vapidEmail) {
+    console.log('[Notification] Initializing WebPush with VAPID email:', vapidEmail);
+    try {
+      webpush.setVapidDetails(vapidEmail, publicVapidKey, privateVapidKey);
+      return true;
+    } catch (err) {
+      console.error('[Notification] Failed to set VAPID details:', err.message);
+      return false;
+    }
+  }
+  console.warn('[Notification] VAPID keys missing in environment variables');
+  return false;
+};
 
-if (publicVapidKey && privateVapidKey && vapidEmail) {
-  webpush.setVapidDetails(vapidEmail, publicVapidKey, privateVapidKey);
-}
+// Call once at startup
+initWebPush();
 
 /**
  * Send Telegram Alert
  * @param {object} payload - Notification data
  */
 export async function sendTelegramAlert(payload) {
+  const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+  const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+
   if (!telegramBotToken || !telegramChatId) {
     console.log('[Notification] Telegram Bot Token or Chat ID not configured, skipping Telegram alert');
     return;
   }
 
+  const truncatedToken = telegramBotToken.substring(0, 10) + '...';
+  console.log(`[Notification] Sending Telegram alert to chat ${telegramChatId} using bot ${truncatedToken}`);
+
   try {
-    const message = `*${payload.title}*\n\n${payload.body}`;
+    // Escape characters for HTML (only basics as we want to preserve tags we add)
+    const escapeHTML = (str) => (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     
-    await axios.post(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+    const escapedTitle = escapeHTML(payload.title);
+    const escapedBody = escapeHTML(payload.body);
+    
+    const message = `<b>${escapedTitle}</b>\n\n${escapedBody}`;
+    
+    const response = await axios.post(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
       chat_id: telegramChatId,
       text: message,
-      parse_mode: 'Markdown'
+      parse_mode: 'HTML',
+      disable_web_page_preview: true
+    }, {
+      timeout: 10000 
     });
 
-    console.log('[Notification] Telegram alert sent successfully');
+    if (response.data && response.data.ok) {
+      console.log('[Notification] Telegram alert sent successfully');
+    } else {
+      console.error('[Notification] Telegram alert failed with response:', response.data);
+    }
   } catch (err) {
-    console.error('[Notification] Error sending Telegram alert:', err.response?.data || err.message);
+    const errorData = err.response?.data;
+    console.error('[Notification] Error sending Telegram alert:', errorData || err.message);
+    
+    // Fallback: try sending without HTML parse mode if HTML parsing failed
+    if (errorData && errorData.description && errorData.description.includes('can\'t parse entities')) {
+      console.log('[Notification] Retrying Telegram alert without HTML formatting...');
+      try {
+        const plainMessage = `${payload.title}\n\n${payload.body}`;
+        await axios.post(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+          chat_id: telegramChatId,
+          text: plainMessage
+        });
+        console.log('[Notification] Telegram alert sent successfully (fallback plain text)');
+      } catch (retryErr) {
+        console.error('[Notification] Fallback Telegram alert also failed:', retryErr.message);
+      }
+    }
   }
 }
 
@@ -137,10 +182,36 @@ export function restartNotifications() {
 /**
  * Trigger portfolio update notification
  * @param {boolean} force - Skip market hours and pause check if true
+ * @param {number} threshold - Profit percentage threshold for regular stocks (optional)
  */
-export async function triggerPortfolioUpdate(force = false) {
+export async function triggerPortfolioUpdate(force = false, threshold = null) {
   const marketHours = isMarketHours();
-  console.log(`[Notification] Triggered (force=${force}, isMarketHours=${marketHours}, isPaused=${notificationState.isPausedDueToSameValues})`);
+  
+  // Use provided threshold or fetch from user_details
+  let profitThresholdToUse = threshold !== null && !isNaN(parseFloat(threshold)) ? parseFloat(threshold) : null;
+  
+  if (profitThresholdToUse === null) {
+    try {
+      const { data: userDetails, error: userError } = await supabase
+        .from('user_details')
+        .select('"profit%"')
+        .eq('id', 1) // Assuming single user with ID 1 based on my check
+        .single();
+      
+      if (!userError && userDetails && userDetails['profit%'] !== null) {
+        profitThresholdToUse = parseFloat(userDetails['profit%']);
+        console.log(`[Notification] Using persisted threshold from user_details: ${profitThresholdToUse}%`);
+      } else {
+        profitThresholdToUse = 170; // Default if not found
+        console.log(`[Notification] No persisted threshold found, using default: ${profitThresholdToUse}%`);
+      }
+    } catch (err) {
+      console.error('[Notification] Error fetching threshold from user_details:', err);
+      profitThresholdToUse = 170;
+    }
+  }
+  
+  console.log(`[Notification] Triggered (force=${force}, inputThreshold=${threshold}, effectiveThreshold=${profitThresholdToUse}, isMarketHours=${marketHours}, isPaused=${notificationState.isPausedDueToSameValues})`);
 
   if (!force) {
     if (!marketHours) {
@@ -203,11 +274,16 @@ export async function triggerPortfolioUpdate(force = false) {
     // Aggregate regular stocks by name to check combined profit threshold
     const regularStocksMap = new Map();
     (result.stockHoldings || []).forEach(h => {
-      if (h.accountType === 'REGULAR') {
-        const existing = regularStocksMap.get(h.stockName) || { invested: 0, marketValue: 0 };
+      // Only include 'REGULAR' account types (case-insensitive)
+      const accountType = (h.accountType || '').toUpperCase();
+      
+      if (accountType === 'REGULAR') {
+        const existing = regularStocksMap.get(h.stockName) || { invested: 0, marketValue: 0, quantity: 0, cmp: 0 };
         regularStocksMap.set(h.stockName, {
           invested: existing.invested + h.invested,
-          marketValue: existing.marketValue + h.marketValue
+          marketValue: existing.marketValue + h.marketValue,
+          quantity: existing.quantity + h.quantity,
+          cmp: h.cmp // CMP is consistent for same stock name
         });
       }
     });
@@ -218,17 +294,32 @@ export async function triggerPortfolioUpdate(force = false) {
         ? ((values.marketValue - values.invested) / values.invested) * 100 
         : 0;
       
-      if (combinedProfitPercent > 170) {
+      const avgBuyPrice = values.quantity > 0 ? values.invested / values.quantity : 0;
+      
+      // Use >= for inclusive check
+      if (combinedProfitPercent >= profitThresholdToUse) {
         highProfitRegularStocks.push({
           stockName,
-          profitPercent: combinedProfitPercent
+          profitPercent: combinedProfitPercent,
+          cmp: values.cmp,
+          avgBuyPrice
         });
       }
     });
 
     highProfitRegularStocks.sort((a, b) => b.profitPercent - a.profitPercent);
 
-    let notificationBody = `Profit: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(2)}%)\nDay: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(2)}%)`;
+    // Limit to top 15 stocks to avoid payload size issues
+    const displayStocks = highProfitRegularStocks.slice(0, 15);
+
+    let notificationBody = `P&L: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(0)}%) | Day: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(0)}%)`;
+
+    if (displayStocks.length > 0) {
+      notificationBody += `\n🔥 High Profit (${highProfitRegularStocks.length}):`;
+      displayStocks.forEach(s => {
+        notificationBody += `\n• ${s.stockName}: ${s.profitPercent.toFixed(0)}% (C:${s.cmp.toFixed(0)}, A:${s.avgBuyPrice.toFixed(0)})`;
+      });
+    }
 
     // Fetch Corporate Actions for Today (IST)
     try {
@@ -244,7 +335,7 @@ export async function triggerPortfolioUpdate(force = false) {
         .eq('status', 'active');
 
       if (!bonusError && bonusActions && bonusActions.length > 0) {
-        notificationBody += '\n\nAction Today:';
+        notificationBody += '\n⚡ Action Today:';
         // Use unique actions (different sources might have same action)
         const uniqueActions = [];
         const seen = new Set();
@@ -264,13 +355,6 @@ export async function triggerPortfolioUpdate(force = false) {
       console.error('[Notification] Error fetching bonus actions:', e);
     }
 
-    if (highProfitRegularStocks.length > 0) {
-      notificationBody += '\n\nHigh Profit Stocks:';
-      highProfitRegularStocks.forEach(s => {
-        notificationBody += `\n• ${s.stockName}: ${s.profitPercent.toFixed(0)}%`;
-      });
-    }
-
     const payload = {
       title: 'Portfolio Update',
       body: notificationBody,
@@ -281,8 +365,18 @@ export async function triggerPortfolioUpdate(force = false) {
       }
     };
 
-    await sendPushNotification(payload);
-    await sendTelegramAlert(payload);
+    // Send notifications in parallel so failure in one doesn't stop the other
+    const results = await Promise.allSettled([
+      sendPushNotification(payload),
+      sendTelegramAlert(payload)
+    ]);
+
+    results.forEach((res, idx) => {
+      if (res.status === 'rejected') {
+        console.error(`[Notification] Alert ${idx === 0 ? 'Push' : 'Telegram'} failed:`, res.reason);
+      }
+    });
+
     return { status: 'sent', data: payload };
   } catch (err) {
     console.error('Error triggering portfolio update:', err);
@@ -306,8 +400,18 @@ export async function sendAngelOneStatusNotification({ success, message, timesta
       }
     };
 
-    await sendPushNotification(payload);
-    await sendTelegramAlert(payload);
+    // Send notifications in parallel
+    const results = await Promise.allSettled([
+      sendPushNotification(payload),
+      sendTelegramAlert(payload)
+    ]);
+
+    results.forEach((res, idx) => {
+      if (res.status === 'rejected') {
+        console.error(`[Notification] Angel One Alert ${idx === 0 ? 'Push' : 'Telegram'} failed:`, res.reason);
+      }
+    });
+
     return { status: 'sent', data: payload };
   } catch (err) {
     console.error('Error sending Angel One status notification:', err);

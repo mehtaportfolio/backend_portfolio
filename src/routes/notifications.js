@@ -62,7 +62,8 @@ router.post('/unsubscribe', async (req, res, next) => {
 router.get('/trigger', async (req, res, next) => {
   try {
     const force = req.query.force === 'true';
-    const result = await triggerPortfolioUpdate(force);
+    const threshold = req.query.threshold ? parseFloat(req.query.threshold) : null;
+    const result = await triggerPortfolioUpdate(force, threshold);
     res.json(result);
   } catch (error) {
     next(error);
