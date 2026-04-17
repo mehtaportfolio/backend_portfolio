@@ -35,8 +35,11 @@ export async function sendTelegramAlert(payload) {
   const telegramChatId = process.env.TELEGRAM_CHAT_ID;
 
   if (!telegramBotToken || !telegramChatId) {
-    console.log('[Notification] Telegram Bot Token or Chat ID not configured, skipping Telegram alert');
-    return;
+    const missing = [];
+    if (!telegramBotToken) missing.push('TELEGRAM_BOT_TOKEN');
+    if (!telegramChatId) missing.push('TELEGRAM_CHAT_ID');
+    console.warn(`[Notification] Telegram alert skipped: Missing ${missing.join(' and ')}`);
+    return false;
   }
 
   const truncatedToken = telegramBotToken.substring(0, 10) + '...';
@@ -62,25 +65,45 @@ export async function sendTelegramAlert(payload) {
 
     if (response.data && response.data.ok) {
       console.log('[Notification] Telegram alert sent successfully');
+      return true;
     } else {
       console.error('[Notification] Telegram alert failed with response:', response.data);
+      throw new Error(`Telegram API responded with error: ${JSON.stringify(response.data)}`);
     }
   } catch (err) {
     const errorData = err.response?.data;
-    console.error('[Notification] Error sending Telegram alert:', errorData || err.message);
+    const errorDesc = errorData?.description || err.message;
+    console.error('[Notification] Error sending Telegram alert:', errorDesc);
     
-    // Fallback: try sending without HTML parse mode if HTML parsing failed
-    if (errorData && errorData.description && errorData.description.includes('can\'t parse entities')) {
-      console.log('[Notification] Retrying Telegram alert without HTML formatting...');
+    // Fallback: try sending without HTML parse mode if HTML parsing failed or any other formatting error
+    console.log('[Notification] Retrying Telegram alert with plain text fallback...');
+    try {
+      const plainMessage = `${payload.title}\n\n${payload.body}`;
+      const fallbackResponse = await axios.post(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+        chat_id: telegramChatId,
+        text: plainMessage,
+        disable_web_page_preview: true
+      });
+      
+      if (fallbackResponse.data && fallbackResponse.data.ok) {
+        console.log('[Notification] Telegram alert sent successfully (fallback plain text)');
+        return true;
+      }
+      throw new Error('Fallback also failed');
+    } catch (retryErr) {
+      console.error('[Notification] Fallback Telegram alert also failed:', retryErr.response?.data || retryErr.message);
+      
+      // Last resort: Extremely simple message
       try {
-        const plainMessage = `${payload.title}\n\n${payload.body}`;
+        console.log('[Notification] Attempting last-resort simple alert...');
         await axios.post(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
           chat_id: telegramChatId,
-          text: plainMessage
+          text: `Portfolio Alert: ${payload.title}. Check app for details.`
         });
-        console.log('[Notification] Telegram alert sent successfully (fallback plain text)');
-      } catch (retryErr) {
-        console.error('[Notification] Fallback Telegram alert also failed:', retryErr.message);
+        return true;
+      } catch (lastErr) {
+        console.error('[Notification] All Telegram delivery attempts failed');
+        throw lastErr;
       }
     }
   }
@@ -279,6 +302,12 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
       } else {
         // Different values, reset the tracking but keep the current one
         notificationState.lastSentValues = [currentValues];
+        
+        // AUTO-RESUME: If values changed, we are no longer in a stagnant state (holiday/error)
+        if (notificationState.isPausedDueToSameValues) {
+          console.log('[Notification] Values changed! Automatically resuming notifications...');
+          notificationState.isPausedDueToSameValues = false;
+        }
       }
     }
 
