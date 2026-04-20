@@ -10,7 +10,7 @@ const initWebPush = () => {
   const vapidEmail = process.env.VAPID_EMAIL;
 
   if (publicVapidKey && privateVapidKey && vapidEmail) {
-    console.log('[Notification] Initializing WebPush with VAPID email:', vapidEmail);
+    // console.log('[Notification] Initializing WebPush with VAPID email:', vapidEmail);
     try {
       webpush.setVapidDetails(vapidEmail, publicVapidKey, privateVapidKey);
       return true;
@@ -38,12 +38,12 @@ export async function sendTelegramAlert(payload) {
     const missing = [];
     if (!telegramBotToken) missing.push('TELEGRAM_BOT_TOKEN');
     if (!telegramChatId) missing.push('TELEGRAM_CHAT_ID');
-    console.warn(`[Notification] Telegram alert skipped: Missing ${missing.join(' and ')}`);
+    // console.warn(`[Notification] Telegram alert skipped: Missing ${missing.join(' and ')}`);
     return false;
   }
 
   const truncatedToken = telegramBotToken.substring(0, 10) + '...';
-  console.log(`[Notification] Sending Telegram alert to chat ${telegramChatId} using bot ${truncatedToken}`);
+  // console.log(`[Notification] Sending Telegram alert to chat ${telegramChatId} using bot ${truncatedToken}`);
 
   try {
     // Escape characters for HTML (only basics as we want to preserve tags we add)
@@ -64,7 +64,7 @@ export async function sendTelegramAlert(payload) {
     });
 
     if (response.data && response.data.ok) {
-      console.log('[Notification] Telegram alert sent successfully');
+      // console.log('[Notification] Telegram alert sent successfully');
       return true;
     } else {
       console.error('[Notification] Telegram alert failed with response:', response.data);
@@ -76,7 +76,7 @@ export async function sendTelegramAlert(payload) {
     console.error('[Notification] Error sending Telegram alert:', errorDesc);
     
     // Fallback: try sending without HTML parse mode if HTML parsing failed or any other formatting error
-    console.log('[Notification] Retrying Telegram alert with plain text fallback...');
+    // console.log('[Notification] Retrying Telegram alert with plain text fallback...');
     try {
       const plainMessage = `${payload.title}\n\n${payload.body}`;
       const fallbackResponse = await axios.post(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
@@ -86,7 +86,7 @@ export async function sendTelegramAlert(payload) {
       });
       
       if (fallbackResponse.data && fallbackResponse.data.ok) {
-        console.log('[Notification] Telegram alert sent successfully (fallback plain text)');
+        // console.log('[Notification] Telegram alert sent successfully (fallback plain text)');
         return true;
       }
       throw new Error('Fallback also failed');
@@ -95,7 +95,7 @@ export async function sendTelegramAlert(payload) {
       
       // Last resort: Extremely simple message
       try {
-        console.log('[Notification] Attempting last-resort simple alert...');
+        // console.log('[Notification] Attempting last-resort simple alert...');
         await axios.post(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
           chat_id: telegramChatId,
           text: `Portfolio Alert: ${payload.title}. Check app for details.`
@@ -128,11 +128,11 @@ const isMarketHours = () => {
   const hours = istTime.getUTCHours();
   const minutes = istTime.getUTCMinutes();
   
-  console.log(`[Notification] Time check (IST): Day=${day}, Time=${hours}:${minutes.toString().padStart(2, '0')}`);
+  // console.log(`[Notification] Time check (IST): Day=${day}, Time=${hours}:${minutes.toString().padStart(2, '0')}`);
 
   // Mon-Fri
   if (day === 0 || day === 6) {
-    console.log('[Notification] Skipping: Weekend');
+    // console.log('[Notification] Skipping: Weekend');
     return false;
   }
   
@@ -141,9 +141,9 @@ const isMarketHours = () => {
   const endInMinutes = 15 * 60 + 40; // Allow slightly more time for final updates
   
   const result = timeInMinutes >= startInMinutes && timeInMinutes <= endInMinutes;
-  if (!result) {
-    console.log(`[Notification] Skipping: Outside market hours (9:15-15:40). Current: ${hours}:${minutes}`);
-  }
+  // if (!result) {
+  //   console.log(`[Notification] Skipping: Outside market hours (9:15-15:40). Current: ${hours}:${minutes}`);
+  // }
   return result;
 };
 
@@ -159,18 +159,18 @@ export async function sendPushNotification(payload) {
 
     if (error) throw error;
     if (!subscriptions || subscriptions.length === 0) {
-      console.log('[Notification] No subscribers found');
+      // console.log('[Notification] No subscribers found');
       return;
     }
 
-    console.log(`[Notification] Sending to ${subscriptions.length} subscribers`);
+    // console.log(`[Notification] Sending to ${subscriptions.length} subscribers`);
     const notificationPayload = JSON.stringify(payload);
 
     const sendPromises = subscriptions.map((sub) => 
       webpush.sendNotification(sub.subscription, notificationPayload)
         .catch(err => {
           if (err.statusCode === 410 || err.statusCode === 404) {
-            console.log(`[Notification] Deleting expired subscription ${sub.id}`);
+            // console.log(`[Notification] Deleting expired subscription ${sub.id}`);
             return supabase.from('push_subscriptions').delete().eq('id', sub.id);
           }
           console.error(`[Notification] Error sending to sub ${sub.id}:`, err);
@@ -178,7 +178,7 @@ export async function sendPushNotification(payload) {
     );
 
     await Promise.all(sendPromises);
-    console.log('[Notification] Push batch complete');
+    // console.log('[Notification] Push batch complete');
   } catch (err) {
     console.error('Error in sendPushNotification:', err);
   }
@@ -198,7 +198,7 @@ export function restartNotifications() {
     lastSentValues: [],
     isPausedDueToSameValues: false
   };
-  console.log('[Notification] State reset manually');
+  // console.log('[Notification] State reset manually');
   return { status: 'success', message: 'Notifications restarted' };
 }
 
@@ -223,10 +223,10 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
       
       if (!userError && userDetails && userDetails['profit%'] !== null) {
         profitThresholdToUse = parseFloat(userDetails['profit%']);
-        console.log(`[Notification] Using persisted threshold from user_details: ${profitThresholdToUse}%`);
+        // console.log(`[Notification] Using persisted threshold from user_details: ${profitThresholdToUse}%`);
       } else {
         profitThresholdToUse = 170; // Default if not found
-        console.log(`[Notification] No persisted threshold found, using default: ${profitThresholdToUse}%`);
+        // console.log(`[Notification] No persisted threshold found, using default: ${profitThresholdToUse}%`);
       }
     } catch (err) {
       console.error('[Notification] Error fetching threshold from user_details:', err);
@@ -234,7 +234,7 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
     }
   }
   
-  console.log(`[Notification] Triggered (force=${force}, inputThreshold=${threshold}, effectiveThreshold=${profitThresholdToUse}, isMarketHours=${marketHours}, isPaused=${notificationState.isPausedDueToSameValues})`);
+  // console.log(`[Notification] Triggered (force=${force}, inputThreshold=${threshold}, effectiveThreshold=${profitThresholdToUse}, isMarketHours=${marketHours}, isPaused=${notificationState.isPausedDueToSameValues})`);
 
   if (!force) {
     if (!marketHours) {
@@ -291,11 +291,11 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
 
       if (isSameAsLast) {
         notificationState.lastSentValues.push(currentValues);
-        console.log(`[Notification] Same values detected (${lastValues.length} consecutive)`);
+        // console.log(`[Notification] Same values detected (${lastValues.length} consecutive)`);
         
         if (notificationState.lastSentValues.length >= 3) {
           notificationState.isPausedDueToSameValues = true;
-          console.log('[Notification] Pausing further notifications: 3 consecutive same values (Holiday/Error)');
+          // console.log('[Notification] Pausing further notifications: 3 consecutive same values (Holiday/Error)');
           
           // Still send this 3rd one, but next ones will be skipped
         }
@@ -305,7 +305,7 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
         
         // AUTO-RESUME: If values changed, we are no longer in a stagnant state (holiday/error)
         if (notificationState.isPausedDueToSameValues) {
-          console.log('[Notification] Values changed! Automatically resuming notifications...');
+          // console.log('[Notification] Values changed! Automatically resuming notifications...');
           notificationState.isPausedDueToSameValues = false;
         }
       }

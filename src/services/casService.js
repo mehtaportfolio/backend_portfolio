@@ -171,7 +171,7 @@ export async function processCAS(buffer, accountName) {
 
   let transactions = parseCAS(text, accountName);
 
-  console.log("Transactions found:", transactions.length);
+  // console.log("Transactions found:", transactions.length);
 
   if (transactions.length === 0) {
     throw new Error("No transactions found in CAS.");

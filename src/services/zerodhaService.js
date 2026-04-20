@@ -43,7 +43,7 @@ function zerodhaLogin(req, res) {
 
   const loginUrl = `https://kite.trade/connect/login?api_key=${creds.apiKey}&state=${accountId}`;
 
-  console.log(`🔐 Redirecting ${accountId} to Zerodha login...`);
+  // console.log(`🔐 Redirecting ${accountId} to Zerodha login...`);
 
   // Store accountId as fallback for callback if state is lost
   lastLoginAccount = accountId;
@@ -85,7 +85,7 @@ async function zerodhaCallback(req, res) {
     const accessToken = session.access_token;
     const publicToken = session.public_token;
 
-    console.log(`✅ Zerodha login success for ${accountId}`);
+    // console.log(`✅ Zerodha login success for ${accountId}`);
 
     // ===============================
     // Save Token in Supabase
@@ -109,7 +109,7 @@ async function zerodhaCallback(req, res) {
     if (error) {
       console.error("❌ DB Insert Error:", error.message);
     } else {
-      console.log(`💾 Token saved for ${accountId}`);
+      // console.log(`💾 Token saved for ${accountId}`);
     }
 
     res.send(`
@@ -158,13 +158,13 @@ async function fetchAndAggregateTrades(req, res) {
     });
 
     // Fetch trades
-    console.log(`🔍 Fetching trades for ${accountId}...`);
+    // console.log(`🔍 Fetching trades for ${accountId}...`);
     const trades = await kite.getTrades();
-    console.log(`✅ Fetched ${trades.length} trades for ${accountId}`);
+    // console.log(`✅ Fetched ${trades.length} trades for ${accountId}`);
 
     // Get today's date in YYYY-MM-DD
     const today = new Date().toISOString().split("T")[0];
-    console.log(`📅 Syncing for today: ${today}`);
+    // console.log(`📅 Syncing for today: ${today}`);
 
     // Filter: DELIVERY BUY trades for today
     const deliveryBuyToday = trades.filter(t => {
@@ -187,7 +187,7 @@ async function fetchAndAggregateTrades(req, res) {
     });
 
     if (deliveryBuyToday.length === 0) {
-      console.log(`ℹ️ No delivery buy trades found today for ${accountId} out of ${trades.length} total trades`);
+      // console.log(`ℹ️ No delivery buy trades found today for ${accountId} out of ${trades.length} total trades`);
       const firstTradeStr = trades.length > 0 ? 
         `[Prod: ${trades[0].product}, Type: ${trades[0].transaction_type}, Fill: ${trades[0].fill_timestamp}, Exch: ${trades[0].exchange_timestamp}]` : 
         "None";
@@ -250,7 +250,7 @@ async function fetchAndAggregateTrades(req, res) {
       return res.status(500).json({ error: "Failed to save aggregated trades: " + insertError.message });
     }
 
-    console.log(`✅ Aggregated ${finalData.length} stocks for ${accountId}`);
+    // console.log(`✅ Aggregated ${finalData.length} stocks for ${accountId}`);
     res.json({
       message: `Successfully aggregated ${finalData.length} stocks`,
       data: finalData

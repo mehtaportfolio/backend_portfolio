@@ -109,6 +109,7 @@ dotenv.config({ path: envPath, override: false });
 import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
+import cron from 'node-cron';
 import errorHandler from './middleware/errorHandler.js';
 import authMiddleware from './middleware/auth.js';
 import cacheMiddleware from './middleware/cache.js';
@@ -118,10 +119,10 @@ import cacheMiddleware from './middleware/cache.js';
 const app = express();
 
 // Simple request logging middleware
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  next();
-});
+// app.use((req, res, next) => {
+//   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+//   next();
+// });
 
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 const PORT = process.env.PORT || 3001;
@@ -178,11 +179,15 @@ const { default: schemesRoutes } = await import('./routes/schemes.js');
 const { default: cacheRoutes } = await import('./routes/cache.js');
 const { default: notificationRoutes } = await import('./routes/notifications.js');
 const { default: dividendRoutes } = await import('./routes/dividend.js');
+const { default: nseRoutes } = await import('./routes/nse.js');
 const { default: fundsRoutes } = await import('./routes/funds.js');
 const { default: casRoutes } = await import('./routes/cas.js');
 const { default: zerodhaRoutes } = await import('./routes/zerodha.js');
 const { sendAngelOneStatusNotification } = await import('./services/notificationService.js');
 const { initializeStockMapping } = await import('./db/initStockMapping.js');
+const { initLivePriceServer, loginToAngel } = await import('./services/angelLiveService.js');
+
+const { startAngelOneService, refreshStockSymbols, syncMarketData, fetchTodayBuyTrades, syncMarketIndices } = await import('./services/angelOneService.js');
 
 // Attach routes
 app.use('/api/dashboard', dashboardRoutes);
@@ -193,13 +198,39 @@ app.use('/api/schemes', schemesRoutes);
 app.use('/api/cache', cacheRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dividend', dividendRoutes);
+app.use('/api/nse', nseRoutes);
 app.use('/funds', fundsRoutes);
 app.use('/api/cas', casRoutes);
 app.use('/api/zerodha', zerodhaRoutes);
 
 // ✅ Add direct kite callback route (Zerodha's expected redirect URL)
 const { zerodhaCallback } = await import('./services/zerodhaService.js');
+const { startCorpActionService } = await import('./services/corpActionService/index.js');
+const { runYahooPriceFixService } = await import('./services/yahooPriceFixService.js');
+const { initNSEIndexUpdater } = await import('./services/nseIndexUpdater/scheduler.js');
 app.get('/kite/callback', zerodhaCallback);
+
+// 🔹 Corporate Action manual trigger route
+app.get('/api/run-corp-actions', async (req, res) => {
+  try {
+    // Run in background
+    startCorpActionService();
+    res.json({ status: 'success', message: 'Corporate action sync started in background' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// 🔹 Yahoo Price Fix manual trigger route
+app.get('/api/run-yahoo-fix', async (req, res) => {
+  try {
+    // Run in background
+    runYahooPriceFixService();
+    res.json({ status: 'success', message: 'Yahoo Price Fix background service started' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
 
 // 🔄 Cache invalidation endpoints for various asset types (from server.old.js)
 const cacheInvalidationHandler = async (req, res) => {
@@ -222,19 +253,6 @@ app.post("/api/assets/bank/invalidate-cache", cacheInvalidationHandler);
 app.post("/api/assets/bdm/invalidate-cache", cacheInvalidationHandler);
 app.post("/api/sip/invalidate-cache", cacheInvalidationHandler);
 app.post("/api/:assetType/invalidate-cache", cacheInvalidationHandler);
-
-// ✅ Add Angel One status route
-app.post('/api/angel-one-status', async (req, res, next) => {
-  try {
-    const { success, message, timestamp, authenticated } = req.body;
-    
-    await sendAngelOneStatusNotification({ success, message, timestamp, authenticated });
-    
-    res.json({ status: 'success', message: 'Notification sent' });
-  } catch (err) {
-    next(err);
-  }
-});
 
 // 🔹 Proxy endpoint for Render service deployment/restart
 app.post('/api/render/deploy', async (req, res) => {
@@ -312,127 +330,60 @@ app.get('/api/render/deploy/:serviceId/:deployId', async (req, res) => {
   }
 });
 
-// 🔹 Proxy endpoints for Angel One services
-app.get('/api/angel-one-health', async (req, res) => {
-  try {
-    const response = await axios.get('https://mehta-ao-prices.onrender.com/health', {
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-    
-    res.json({
-      status: 'success',
-      message: 'Angel One server is healthy',
-      data: response.data
-    });
-  } catch (error) {
-    console.error('❌ Error calling Angel One health check:', error.message);
-    res.status(error.response?.status || 500).json({
-      status: 'error',
-      message: error.message || 'Failed to reach Angel One server',
-      error: error.response?.data || error.message
-    });
-  }
+// 🔹 Angel One internal service endpoints
+app.get('/api/angel-one-health', (req, res) => {
+  res.json({
+    status: 'success',
+    message: 'Angel One internal service is running',
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.get('/refresh-stocks', async (req, res) => {
   try {
-    const response = await axios.get('https://mehta-ao-prices.onrender.com/refresh-stocks', {
-      timeout: 60000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-    
+    const result = await refreshStockSymbols();
     res.json({
-      status: 'success',
-      message: response.data?.message || 'Angel One stock list refreshed successfully',
-      data: response.data
+      status: "success",
+      message: `✅ Stock list refreshed: ${result.count} stocks processed`
     });
   } catch (error) {
-    console.error('❌ Error calling Angel One refresh-stocks:', error.message);
-    console.error('Error details:', error.response?.status, error.response?.data);
-    res.status(error.response?.status || 500).json({
-      status: 'error',
-      message: error.message || 'Failed to refresh Angel One stock list',
-      error: error.response?.data || error.message
-    });
+    res.status(500).json({ status: "error", message: `❌ Stock refresh failed: ${error.message}` });
   }
 });
 
-app.post('/sync', async (req, res) => {
+app.post(['/sync', '/sync-cmp'], async (req, res) => {
   try {
-    const response = await axios.get('https://mehta-ao-prices.onrender.com/sync', {
-      timeout: 60000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-    
-    res.json({
-      status: 'success',
-      message: response.data?.message || 'Angel One sync triggered successfully',
-      data: response.data
-    });
+    await syncMarketData();
+    res.json({ status: 'success', message: '✅ CMP Sync completed successfully' });
   } catch (error) {
-    console.error('❌ Error calling Angel One sync:', error.message);
-    res.status(error.response?.status || 500).json({
-      status: 'error',
-      message: error.message || 'Failed to trigger Angel One sync',
-      error: error.response?.data || error.message
-    });
+    res.status(500).json({ status: 'error', message: `❌ CMP Sync failed: ${error.message}` });
   }
 });
 
-app.post('/sync-cmp', async (req, res) => {
+app.post('/sync-indices', async (req, res) => {
   try {
-    const response = await axios.get('https://mehta-ao-prices.onrender.com/sync-cmp', {
-      timeout: 60000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-    
-    res.json({
-      status: 'success',
-      message: response.data?.message || 'CMP sync triggered successfully',
-      data: response.data
-    });
+    await syncMarketIndices();
+    res.json({ status: 'success', message: '✅ Market Indices Sync completed successfully' });
   } catch (error) {
-    console.error('❌ Error calling CMP sync:', error.message);
-    console.error('Error details:', error.response?.status, error.response?.data);
-    res.status(error.response?.status || 500).json({
-      status: 'error',
-      message: error.message || 'Failed to trigger CMP sync',
-      error: error.response?.data || error.message
-    });
+    res.status(500).json({ status: 'error', message: `❌ Market Indices Sync failed: ${error.message}` });
   }
 });
 
 app.post('/sync-lcp', async (req, res) => {
   try {
-    const response = await axios.get('https://mehta-ao-prices.onrender.com/sync-lcp', {
-      timeout: 60000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-    
-    res.json({
-      status: 'success',
-      message: response.data?.message || 'LCP sync triggered successfully',
-      data: response.data
-    });
+    await syncMarketData();
+    res.json({ status: 'success', message: '✅ LCP Sync completed successfully' });
   } catch (error) {
-    console.error('❌ Error calling LCP sync:', error.message);
-    console.error('Error details:', error.response?.status, error.response?.data);
-    res.status(error.response?.status || 500).json({
-      status: 'error',
-      message: error.message || 'Failed to trigger LCP sync',
-      error: error.response?.data || error.message
-    });
+    res.status(500).json({ status: 'error', message: `❌ LCP Sync failed: ${error.message}` });
+  }
+});
+
+app.get('/fetch-buy-trades', async (req, res) => {
+  try {
+    await fetchTodayBuyTrades();
+    res.json({ status: 'success', message: '✅ Buy trades aggregated & stored' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
   }
 });
 
@@ -448,11 +399,11 @@ app.post('/indices/restart', async (req, res) => {
 
 app.post('/yahoo-price/trigger', async (req, res) => {
   try {
-    // Yahoo Price might be a GET or POST depending on how it's implemented
-    const response = await axios.get('https://stock-yahoo-allq.onrender.com', { timeout: 60000 });
-    res.json(response.data);
+    // Run in background
+    runYahooPriceFixService();
+    res.json({ status: 'success', message: 'Internal Yahoo Price Fix service triggered' });
   } catch (error) {
-    res.status(error.response?.status || 500).json({ status: 'error', message: error.message });
+    res.status(500).json({ status: 'error', message: error.message });
   }
 });
 
@@ -487,6 +438,28 @@ try {
 
 // -------------------------------------------------------------
 // Start the server
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
 console.log(`🚀 Server running on port ${PORT}`);
+  
+  // Initialize Angel Live Prices
+  try {
+    initLivePriceServer(server);
+    loginToAngel();
+    startAngelOneService();
+    initNSEIndexUpdater();
+  } catch (err) {
+    console.error('[Angel] Error initializing live prices:', err);
+  }
+
+  // 🕒 Corporate Action Sync - Scheduled (9:00 AM and 9:00 PM)
+  cron.schedule('0 9,21 * * *', () => {
+    console.log('⏰ [Cron] Triggering Corporate Action Sync...');
+    startCorpActionService();
+  });
+
+  // 🕒 Yahoo Price Fix - Scheduled (Every 6 hours)
+  cron.schedule('0 */6 * * *', () => {
+    console.log('⏰ [Cron] Triggering Yahoo Price Fix Service...');
+    runYahooPriceFixService();
+  });
 });
