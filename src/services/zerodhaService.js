@@ -240,20 +240,44 @@ async function fetchAndAggregateTrades(req, res) {
       position_date: item.date
     }));
 
-    // Insert into equity_positions
-    const { error: insertError } = await supabase
+    // 1. Delete rows with date < today (Requirement 1)
+    // irrespective of account_id or anything else
+    await supabase
       .from("equity_positions")
-      .insert(finalData);
+      .delete()
+      .lt("position_date", today);
 
-    if (insertError) {
-      console.error("❌ Insert Error:", insertError.message, "Data:", finalData);
-      return res.status(500).json({ error: "Failed to save aggregated trades: " + insertError.message });
+    // 2. Fetch existing today's records for this account to avoid duplicates (Requirement 2)
+    const { data: existingToday } = await supabase
+      .from("equity_positions")
+      .select("symbol")
+      .eq("account_id", accountId)
+      .eq("position_date", today);
+    
+    const existingSymbols = new Set(existingToday?.map(r => r.symbol) || []);
+    
+    const dataToInsert = finalData.filter(item => !existingSymbols.has(item.symbol));
+
+    if (dataToInsert.length > 0) {
+      // Insert into equity_positions
+      const { error: insertError } = await supabase
+        .from("equity_positions")
+        .insert(dataToInsert);
+
+      if (insertError) {
+        console.error("❌ Insert Error:", insertError.message, "Data:", dataToInsert);
+        return res.status(500).json({ error: "Failed to save aggregated trades: " + insertError.message });
+      }
+      // console.log(`✅ Inserted ${dataToInsert.length} new stocks for ${accountId}`);
+    } else {
+      // console.log(`ℹ️ No new stocks to insert for ${accountId} (all were duplicates)`);
     }
 
-    // console.log(`✅ Aggregated ${finalData.length} stocks for ${accountId}`);
     res.json({
-      message: `Successfully aggregated ${finalData.length} stocks`,
-      data: finalData
+      message: dataToInsert.length > 0 
+        ? `Successfully aggregated and saved ${dataToInsert.length} new stocks`
+        : `All stocks already exist for today`,
+      data: dataToInsert
     });
 
   } catch (err) {

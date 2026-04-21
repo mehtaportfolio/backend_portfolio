@@ -22,11 +22,12 @@ const toNumber = (value) => {
 };
 
 /**
- * Build CMPs and LCPs maps from master tables
+ * Build CMPs, LCPs, and Symbol maps from master tables
  */
 export function buildCMPMaps(data) {
   const stockCmpMap = new Map();
   const stockLcpMap = new Map();
+  const stockSymbolMap = new Map();
   const fundCmpMap = new Map();
   const fundLcpMap = new Map();
   const npsCmpMap = new Map();
@@ -40,6 +41,9 @@ export function buildCMPMaps(data) {
     if (name) {
       stockCmpMap.set(name, toNumber(m.cmp));
       stockLcpMap.set(name, toNumber(m.lcp));
+      if (m.symbol_ao) {
+        stockSymbolMap.set(name, m.symbol_ao);
+      }
     }
   });
 
@@ -59,7 +63,7 @@ export function buildCMPMaps(data) {
     }
   });
 
-  return { stockCmpMap, stockLcpMap, fundCmpMap, fundLcpMap, npsCmpMap, npsLcpMap };
+  return { stockCmpMap, stockLcpMap, stockSymbolMap, fundCmpMap, fundLcpMap, npsCmpMap, npsLcpMap };
 }
 
 /**
@@ -82,7 +86,7 @@ export async function getDashboardAssetAllocation(supabase, userId, priceSource 
     }
 
     // Build CMP and LCP maps
-    const { stockCmpMap, stockLcpMap, fundCmpMap, fundLcpMap, npsCmpMap, npsLcpMap } = buildCMPMaps(data);
+    const { stockCmpMap, stockLcpMap, stockSymbolMap, fundCmpMap, fundLcpMap, npsCmpMap, npsLcpMap } = buildCMPMaps(data);
 
     // Calculate total equity charges
     const totalEquityCharges = (data.equity_charges?.data || []).reduce((sum, charge) => {
@@ -90,7 +94,7 @@ export async function getDashboardAssetAllocation(supabase, userId, priceSource 
     }, 0);
 
     // Calculate all asset types
-    const stockData = calculateStockLots(data.stock_transactions?.data, stockCmpMap);
+    const stockData = calculateStockLots(data.stock_transactions?.data, stockCmpMap, stockSymbolMap);
     const mfData = calculateMFLots(data.mf_transactions?.data, fundCmpMap);
     const bankData = calculateBankHoldings(data.bank_transactions?.data);
     

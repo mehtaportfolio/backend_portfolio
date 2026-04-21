@@ -124,9 +124,34 @@ export async function fetchUserAllData(supabase, userId, priceSource = 'stock_ma
 
   // Support array of userIds
   const userIdArray = Array.isArray(userId) ? userId : [userId];
+
+  // If userId is a UUID, resolve it to account_names from user_master first
+  let resolvedUserIds = userIdArray;
+  const isUUID = (id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+  if (userId !== 'all' && userIdArray.some(isUUID)) {
+    const { data: userMaster } = await fetchAllRows(supabase, 'user_master', {
+      select: 'account_name',
+      filters: [(q) => q.in('user_id', userIdArray.filter(isUUID))]
+    });
+
+    if (userMaster && userMaster.length > 0) {
+      const accountNames = userMaster.map(u => u.account_name).filter(Boolean);
+      resolvedUserIds = [...new Set([
+        ...userIdArray.filter(id => !isUUID(id)),
+        ...accountNames
+      ])];
+    } else {
+      // If we only have UUIDs and none match user_master, then user has no accounts
+      if (userIdArray.every(isUUID)) {
+        resolvedUserIds = ['__NON_EXISTENT_ACCOUNT__'];
+      }
+    }
+  }
+
   const filterFn = (q) => {
     if (userId === 'all') return q;
-    return q.in('account_name', userIdArray);
+    return q.in('account_name', resolvedUserIds);
   };
 
   const queries = {

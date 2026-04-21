@@ -61,9 +61,10 @@ const reduceLotUnits = (lots, unitsToRemove) => {
  * Calculate stock portfolio with FIFO lot tracking
  * @param {Array} transactions - Stock transactions
  * @param {Map} cmpMap - Current market prices (stock_name -> price)
+ * @param {Map} symbolMap - Stock symbol mapping (stock_name -> symbol_ao)
  * @returns {object} - { stock, etf, holdings }
  */
-export function calculateStockLots(transactions = [], cmpMap = new Map()) {
+export function calculateStockLots(transactions = [], cmpMap = new Map(), symbolMap = new Map()) {
   const aggregated = new Map();
   let stockMarketValue = 0;
   let stockInvested = 0;
@@ -103,6 +104,7 @@ export function calculateStockLots(transactions = [], cmpMap = new Map()) {
     const invested = entry.invested;
     const profit = marketValue - invested;
     const profitPercent = invested > 1e-8 ? (profit / invested) * 100 : 0;
+    const symbol_ao = symbolMap.get(entry.stockName.toUpperCase()) || null;
 
     const holding = {
       stockName: entry.stockName,
@@ -115,6 +117,7 @@ export function calculateStockLots(transactions = [], cmpMap = new Map()) {
       profit: profit,
       profitPercent: profitPercent,
       cmp: cmp,
+      symbol_ao: symbol_ao,
     };
 
     holdings.push(holding);

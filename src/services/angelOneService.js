@@ -402,20 +402,34 @@ export async function fetchTodayBuyTrades() {
 
         const today = new Date().toISOString().split("T")[0];
 
-        // Replace today's data
+        // 1. Delete rows with date < today (Requirement 1)
+        // irrespective of account_id or anything else
         await supabase
             .from('equity_positions')
             .delete()
-            .eq('broker', 'angel')
+            .lt('position_date', today);
+
+        // 2. Fetch existing today's records for this account to avoid duplicates (Requirement 2)
+        const { data: existingToday } = await supabase
+            .from('equity_positions')
+            .select('symbol')
             .eq('account_id', clientId)
             .eq('position_date', today);
 
-        const { error } = await supabase.from('equity_positions').insert(formatted);
+        const existingSymbols = new Set(existingToday?.map(r => r.symbol) || []);
 
-        if (error) {
-            log(`Error inserting trades: ${error.message}`, 'ERROR');
+        const dataToInsert = formatted.filter(item => !existingSymbols.has(item.symbol));
+
+        if (dataToInsert.length > 0) {
+            const { error } = await supabase.from('equity_positions').insert(dataToInsert);
+
+            if (error) {
+                log(`Error inserting trades: ${error.message}`, 'ERROR');
+            } else {
+                log(`✅ Inserted ${dataToInsert.length} new aggregated BUY trades for ${clientId}.`);
+            }
         } else {
-            log(`✅ Inserted ${formatted.length} aggregated BUY trades.`);
+            log(`ℹ️ No new trades to insert for ${clientId} (all were duplicates).`);
         }
 
     } catch (error) {

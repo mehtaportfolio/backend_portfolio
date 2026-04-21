@@ -56,6 +56,38 @@ function normalizeStockName(name) {
 }
 
 /**
+ * Resolve userId to accountNames
+ */
+async function getAccountNames(supabase, userId) {
+  if (!userId || userId === 'all') return null;
+
+  const userIdArray = Array.isArray(userId) ? userId : [userId];
+  const isUUID = (id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+  if (!userIdArray.some(isUUID)) return userIdArray;
+
+  const { data: userMaster } = await fetchAllRows(supabase, 'user_master', {
+    select: 'account_name',
+    filters: [(q) => q.in('user_id', userIdArray.filter(isUUID))]
+  });
+
+  if (userMaster && userMaster.length > 0) {
+    const accountNames = userMaster.map(u => u.account_name).filter(Boolean);
+    return [...new Set([
+      ...userIdArray.filter(id => !isUUID(id)),
+      ...accountNames
+    ])];
+  }
+
+  // If we only have UUIDs and none match, user has no accounts
+  if (userIdArray.every(isUUID)) {
+    return ['__NON_EXISTENT_ACCOUNT__'];
+  }
+
+  return userIdArray.filter(id => !isUUID(id));
+}
+
+/**
  * Get open stock holdings grouped by stock name
  */
 export async function getOpenStockData(supabase, userId, priceSource = 'stock_master') {
@@ -84,7 +116,7 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
     // Fetch prices from selected source (stock_master or stock_mapping)
     // Note: stock_mapping may not have category/sector columns, so we only select what's guaranteed
     const priceSelect = priceTable === 'stock_mapping' 
-      ? 'stock_name, cmp, lcp'
+      ? 'stock_name, cmp, lcp, symbol_ao'
       : 'stock_name, cmp, lcp, category, sector, basic_industry';
     
     let { data: masters, error: masterError } = await fetchAllRows(
@@ -149,12 +181,14 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
     const categoryMap = {};
     const sectorMap = {};
     const basicIndustryMap = {};
+    const symbolAoMap = {};
 
     // Create maps with normalized keys to handle name mismatches
     (masters || []).forEach((m) => {
       const normalizedKey = normalizeStockName(m.stock_name);
       let cmp = toNumber(m.cmp);
       let lcp = toNumber(m.lcp);
+      let symbol_ao = m.symbol_ao || null;
       
       // 🔹 Fallback: If stock_mapping CMP or LCP is missing/invalid, use stock_master values
       if (priceTable === 'stock_mapping') {
@@ -170,6 +204,7 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
       masterMap[normalizedKey] = {
         cmp: cmp,
         lcp: lcp,
+        symbol_ao: symbol_ao,
       };
     });
     
@@ -179,6 +214,7 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
       if (m.category) categoryMap[normalizedKey] = m.category;
       if (m.sector) sectorMap[normalizedKey] = m.sector;
       if (m.basic_industry) basicIndustryMap[normalizedKey] = m.basic_industry;
+      if (m.symbol_ao) symbolAoMap[normalizedKey] = m.symbol_ao;
     });
 
     // Group by stock name, with normalized lookup
@@ -192,6 +228,7 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
           transactions: [],
           cmp: masterMap[normalizedKey]?.cmp || 0,
           lcp: masterMap[normalizedKey]?.lcp || 0,
+          symbol_ao: masterMap[normalizedKey]?.symbol_ao || symbolAoMap[normalizedKey] || null,
           category: categoryMap[normalizedKey] || null,
           sector: sectorMap[normalizedKey] || null,
           basic_industry: basicIndustryMap[normalizedKey] || null,
@@ -239,6 +276,7 @@ export async function getOpenStockData(supabase, userId, priceSource = 'stock_ma
         stock_name: group.stock_name,
         livePrice: cmp,
         lcp: lcp,
+        symbol_ao: group.symbol_ao,
         changePct: changePct,
         invested: invested,
         marketValue: marketValue,
@@ -533,7 +571,7 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
 
     const priceSelect = priceTable === 'stock_mapping' 
-      ? 'stock_name, cmp, lcp'
+      ? 'stock_name, cmp, lcp, symbol_ao'
       : 'stock_name, cmp, lcp, category, sector, basic_industry';
 
     // Fetch prices from selected source
@@ -598,11 +636,13 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
     const categoryMap = {};
     const sectorMap = {};
     const basicIndustryMap = {};
+    const symbolAoMap = {};
 
     (masters || []).forEach((m) => {
       const normalizedKey = normalizeStockName(m.stock_name);
       let cmp = toNumber(m.cmp);
       let lcp = toNumber(m.lcp);
+      let symbol_ao = m.symbol_ao || null;
       
       // 🔹 Fallback: If stock_mapping CMP or LCP is missing/invalid, use stock_master values
       if (priceTable === 'stock_mapping') {
@@ -618,6 +658,7 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
       masterMap[normalizedKey] = {
         cmp: cmp,
         lcp: lcp,
+        symbol_ao: symbol_ao,
       };
     });
 
@@ -640,6 +681,7 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
           transactions: [],
           cmp: masterMap[normalizedKey]?.cmp || 0,
           lcp: masterMap[normalizedKey]?.lcp || 0,
+          symbol_ao: masterMap[normalizedKey]?.symbol_ao || null,
           category: categoryMap[normalizedKey] || null,
           sector: sectorMap[normalizedKey] || null,
           basic_industry: basicIndustryMap[normalizedKey] || null,
@@ -704,6 +746,7 @@ export async function getETFData(supabase, userId, priceSource = 'stock_master')
         stock_name: group.stock_name,
         livePrice: cmp,
         lcp: lcp,
+        symbol_ao: group.symbol_ao,
         invested: openInvested,
         marketValue: openMarketValue,
         urp: urp,
@@ -752,7 +795,7 @@ export async function getPortfolioData(supabase, userId, priceSource = 'stock_ma
 
     // Only select columns that are guaranteed to exist in the price table
     const priceSelect = priceTable === 'stock_mapping' 
-      ? 'stock_name, cmp, lcp'
+      ? 'stock_name, cmp, lcp, symbol_ao'
       : 'stock_name, cmp, lcp, category, sector';
 
     const [
@@ -815,6 +858,7 @@ export async function getPortfolioData(supabase, userId, priceSource = 'stock_ma
       const normalizedKey = normalizeStockName(m.stock_name);
       let cmp = toNumber(m.cmp);
       let lcp = toNumber(m.lcp);
+      let symbol_ao = m.symbol_ao || null;
       
       // 🔹 Fallback: If stock_mapping CMP or LCP is missing/invalid, use stock_master values
       if (priceTable === 'stock_mapping') {
@@ -832,6 +876,7 @@ export async function getPortfolioData(supabase, userId, priceSource = 'stock_ma
         lcp: lcp,
         category: m.category,
         sector: m.sector,
+        symbol_ao: symbol_ao,
       };
     });
 
@@ -896,6 +941,7 @@ export async function getPortfolioData(supabase, userId, priceSource = 'stock_ma
           dayChange: 0,
           cmp: masterMap[normalizedKey]?.cmp || 0,
           lcp: masterMap[normalizedKey]?.lcp || 0,
+          symbol_ao: masterMap[normalizedKey]?.symbol_ao || null,
         };
       }
 
