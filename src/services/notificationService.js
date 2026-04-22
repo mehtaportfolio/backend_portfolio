@@ -318,17 +318,31 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
       const accountType = (h.accountType || '').toUpperCase();
       
       if (accountType === 'REGULAR') {
-        const existing = regularStocksMap.get(h.stockName) || { invested: 0, marketValue: 0, quantity: 0, cmp: 0 };
+        const existing = regularStocksMap.get(h.stockName) || { 
+          invested: 0, 
+          marketValue: 0, 
+          quantity: 0, 
+          cmp: 0,
+          accounts: new Set()
+        };
+        
+        const invested = toNumber(h.invested);
+        const marketValue = toNumber(h.marketValue);
+        const quantity = toNumber(h.quantity);
+        
         regularStocksMap.set(h.stockName, {
-          invested: existing.invested + h.invested,
-          marketValue: existing.marketValue + h.marketValue,
-          quantity: existing.quantity + h.quantity,
-          cmp: h.cmp // CMP is consistent for same stock name
+          invested: existing.invested + invested,
+          marketValue: existing.marketValue + marketValue,
+          quantity: existing.quantity + quantity,
+          cmp: h.cmp, // CMP is consistent for same stock name
+          accounts: h.accountName ? existing.accounts.add(h.accountName) && existing.accounts : existing.accounts
         });
       }
     });
 
     const highProfitRegularStocks = [];
+    const highProfitByAccountCombination = new Map();
+
     regularStocksMap.forEach((values, stockName) => {
       const combinedProfitPercent = values.invested > 0 
         ? ((values.marketValue - values.invested) / values.invested) * 100 
@@ -338,28 +352,45 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
       
       // Use >= for inclusive check
       if (combinedProfitPercent >= profitThresholdToUse) {
-        highProfitRegularStocks.push({
+        const sortedAccounts = Array.from(values.accounts).sort();
+        const accountKey = sortedAccounts.join(' & ') || 'Other';
+        
+        const stockInfo = {
           stockName,
           profitPercent: combinedProfitPercent,
           cmp: values.cmp,
           avgBuyPrice
-        });
+        };
+        
+        const stocksForAccount = highProfitByAccountCombination.get(accountKey) || [];
+        stocksForAccount.push(stockInfo);
+        highProfitByAccountCombination.set(accountKey, stocksForAccount);
+        
+        highProfitRegularStocks.push(stockInfo);
       }
     });
 
     highProfitRegularStocks.sort((a, b) => b.profitPercent - a.profitPercent);
 
-    // Limit to top 15 stocks to avoid payload size issues
-    const displayStocks = highProfitRegularStocks.slice(0, 15);
+    // Sort account combinations to have some deterministic order, maybe by number of stocks or alphabetically
+    const sortedAccountKeys = Array.from(highProfitByAccountCombination.keys()).sort();
 
     let notificationBody = `P&L: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(0)}%) | Day: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(0)}%)`;
 
     notificationBody += `\nStocks : ${stockProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${stockProfitPercent.toFixed(1)}%) II ETF: ${etfProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${etfProfitPercent.toFixed(1)}%)`;
 
-    if (displayStocks.length > 0) {
+    if (highProfitRegularStocks.length > 0) {
       notificationBody += `\n🔥 High Profit (${highProfitRegularStocks.length}):`;
-      displayStocks.forEach(s => {
-        notificationBody += `\n• ${s.stockName}: ${s.profitPercent.toFixed(0)}% (C:${s.cmp.toFixed(0)}, A:${s.avgBuyPrice.toFixed(0)})`;
+      
+      sortedAccountKeys.forEach(accountKey => {
+        const stocks = highProfitByAccountCombination.get(accountKey);
+        // Sort stocks within account grouping by profit percent
+        stocks.sort((a, b) => b.profitPercent - a.profitPercent);
+        
+        notificationBody += `\nAccount Name ${accountKey}`;
+        stocks.forEach(s => {
+          notificationBody += `\n• ${s.stockName}: ${s.profitPercent.toFixed(0)}% (C:${s.cmp.toFixed(0)}, A:${s.avgBuyPrice.toFixed(0)})`;
+        });
       });
     }
 
