@@ -63,7 +63,8 @@ router.get('/trigger', async (req, res, next) => {
   try {
     const force = req.query.force === 'true';
     const threshold = req.query.threshold ? parseFloat(req.query.threshold) : null;
-    const result = await triggerPortfolioUpdate(force, threshold);
+    const type = req.query.type || 'all'; // 'mobile', 'telegram', or 'all'
+    const result = await triggerPortfolioUpdate(force, threshold, type);
     res.json(result);
   } catch (error) {
     next(error);
@@ -72,7 +73,8 @@ router.get('/trigger', async (req, res, next) => {
 
 // Restart notifications (reset holiday/error pause)
 router.post('/restart', (req, res) => {
-  const result = restartNotifications();
+  const type = req.query.type || 'all';
+  const result = restartNotifications(type);
   res.json(result);
 });
 

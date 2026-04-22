@@ -186,72 +186,93 @@ export async function sendPushNotification(payload) {
 
 // Memory state for notification pausing
 let notificationState = {
-  lastSentValues: [], // Array of { profit: number, change: number }
-  isPausedDueToSameValues: false
+  mobile: {
+    lastSentValues: [], // Array of { profit: number, change: number }
+    isPausedDueToSameValues: false,
+  },
+  telegram: {
+    lastSentValues: [],
+    isPausedDueToSameValues: false,
+  },
+  isTelegramEnabled: true // Default to true
 };
 
 /**
  * Reset notification state (called by restart endpoint)
+ * @param {string} type - 'mobile', 'telegram', or 'all'
  */
-export function restartNotifications() {
-  notificationState = {
-    lastSentValues: [],
-    isPausedDueToSameValues: false
-  };
-  // console.log('[Notification] State reset manually');
-  return { status: 'success', message: 'Notifications restarted' };
+export function restartNotifications(type = 'all') {
+  if (type === 'all' || type === 'mobile') {
+    notificationState.mobile.lastSentValues = [];
+    notificationState.mobile.isPausedDueToSameValues = false;
+  }
+  if (type === 'all' || type === 'telegram') {
+    notificationState.telegram.lastSentValues = [];
+    notificationState.telegram.isPausedDueToSameValues = false;
+  }
+  // console.log(`[Notification] State reset manually for: ${type}`);
+  return { status: 'success', message: `Notifications restarted for ${type}` };
+}
+
+/**
+ * Fetch notification settings from user_details
+ * @returns {Promise<object>}
+ */
+async function fetchNotificationSettings() {
+  try {
+    const { data: userDetails, error } = await supabase
+      .from('user_details')
+      .select('*')
+      .eq('id', 1)
+      .single();
+    
+    if (error) throw error;
+    
+    if (userDetails) {
+      if (userDetails.telegram_enabled !== undefined) {
+        notificationState.isTelegramEnabled = userDetails.telegram_enabled !== false;
+      }
+      return userDetails;
+    }
+  } catch (err) {
+    console.error('[Notification] Error fetching notification settings:', err.message);
+  }
+  return null;
 }
 
 /**
  * Trigger portfolio update notification
  * @param {boolean} force - Skip market hours and pause check if true
  * @param {number} threshold - Profit percentage threshold for regular stocks (optional)
+ * @param {string} type - Notification type: 'mobile', 'telegram', or 'all'
  */
-export async function triggerPortfolioUpdate(force = false, threshold = null) {
+export async function triggerPortfolioUpdate(force = false, threshold = null, type = 'all') {
   const marketHours = isMarketHours();
   
   // Use provided threshold or fetch from user_details
   let profitThresholdToUse = threshold !== null && !isNaN(parseFloat(threshold)) ? parseFloat(threshold) : null;
   
-  if (profitThresholdToUse === null) {
-    try {
-      const { data: userDetails, error: userError } = await supabase
-        .from('user_details')
-        .select('"profit%"')
-        .eq('id', 1) // Assuming single user with ID 1 based on my check
-        .single();
-      
-      if (!userError && userDetails && userDetails['profit%'] !== null) {
-        profitThresholdToUse = parseFloat(userDetails['profit%']);
-        // console.log(`[Notification] Using persisted threshold from user_details: ${profitThresholdToUse}%`);
-      } else {
-        profitThresholdToUse = 170; // Default if not found
-        // console.log(`[Notification] No persisted threshold found, using default: ${profitThresholdToUse}%`);
-      }
-    } catch (err) {
-      console.error('[Notification] Error fetching threshold from user_details:', err);
-      profitThresholdToUse = 170;
+  const userDetails = await fetchNotificationSettings();
+  if (userDetails && profitThresholdToUse === null) {
+    if (userDetails['profit%'] !== null) {
+      profitThresholdToUse = parseFloat(userDetails['profit%']);
     }
   }
-  
-  // console.log(`[Notification] Triggered (force=${force}, inputThreshold=${threshold}, effectiveThreshold=${profitThresholdToUse}, isMarketHours=${marketHours}, isPaused=${notificationState.isPausedDueToSameValues})`);
 
-  if (!force) {
-    if (!marketHours) {
-      return { status: 'skipped', reason: 'outside_market_hours' };
-    }
-    if (notificationState.isPausedDueToSameValues) {
-      return { status: 'skipped', reason: 'paused_due_to_holiday_or_error' };
-    }
+  if (profitThresholdToUse === null) {
+    profitThresholdToUse = 170; // Default
+  }
+  
+  // console.log(`[Notification] Triggered (force=${force}, inputThreshold=${threshold}, effectiveThreshold=${profitThresholdToUse}, isMarketHours=${marketHours}, type=${type})`);
+
+  if (!force && !marketHours) {
+    return { status: 'skipped', reason: 'outside_market_hours' };
   }
 
   try {
-    // We target the primary user accounts. PDM and PSM seem to be part of your portfolio too.
-    // BDM is excluded as requested.
     const userIds = ['PM', 'PDM', 'PSM'];
     const result = await getDashboardAssetAllocation(supabase, userIds);
     
-    // The user specifically wants Stock + ETF (Equity Button logic)
     const equityRows = result.rows.filter(r => r.assetType === 'Stock' || r.assetType === 'ETF');
     
     const stockRows = result.rows.filter(r => r.assetType === 'Stock');
@@ -275,40 +296,41 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
       ? (overallDayChange / (totalMarketValue - overallDayChange)) * 100 
       : 0;
 
-    // Check for 3 consecutive same values (Holiday/Error detection)
-    if (!force) {
-      const currentValues = { 
-        profit: Math.round(totalProfit), 
-        change: Math.round(overallDayChange) 
-      };
+    const currentValues = { 
+      profit: Math.round(totalProfit), 
+      change: Math.round(overallDayChange) 
+    };
+
+    // Helper to process skip/pause logic for a specific service
+    const shouldSkipService = (serviceType) => {
+      if (force) return false;
       
-      const lastValues = notificationState.lastSentValues;
+      const state = notificationState[serviceType];
+      if (state.isPausedDueToSameValues) return true;
       
-      // Check if current is same as previous
+      const lastValues = state.lastSentValues;
       const isSameAsLast = lastValues.length > 0 && 
                            lastValues[lastValues.length - 1].profit === currentValues.profit && 
                            lastValues[lastValues.length - 1].change === currentValues.change;
 
       if (isSameAsLast) {
-        notificationState.lastSentValues.push(currentValues);
-        // console.log(`[Notification] Same values detected (${lastValues.length} consecutive)`);
-        
-        if (notificationState.lastSentValues.length >= 3) {
-          notificationState.isPausedDueToSameValues = true;
-          // console.log('[Notification] Pausing further notifications: 3 consecutive same values (Holiday/Error)');
-          
-          // Still send this 3rd one, but next ones will be skipped
+        state.lastSentValues.push(currentValues);
+        if (state.lastSentValues.length >= 3) {
+          state.isPausedDueToSameValues = true;
         }
+        return true; // Skip this one (2nd and 3rd time)
       } else {
-        // Different values, reset the tracking but keep the current one
-        notificationState.lastSentValues = [currentValues];
-        
-        // AUTO-RESUME: If values changed, we are no longer in a stagnant state (holiday/error)
-        if (notificationState.isPausedDueToSameValues) {
-          // console.log('[Notification] Values changed! Automatically resuming notifications...');
-          notificationState.isPausedDueToSameValues = false;
-        }
+        state.lastSentValues = [currentValues];
+        state.isPausedDueToSameValues = false;
+        return false;
       }
+    };
+
+    const skipMobile = (type === 'all' || type === 'mobile') ? shouldSkipService('mobile') : true;
+    const skipTelegram = (type === 'all' || type === 'telegram') ? shouldSkipService('telegram') : true;
+
+    if (skipMobile && skipTelegram && !force) {
+      return { status: 'skipped', reason: 'paused_or_no_change_all_services' };
     }
 
     // Aggregate regular stocks by name to check combined profit threshold
@@ -375,21 +397,30 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
     // Sort account combinations to have some deterministic order, maybe by number of stocks or alphabetically
     const sortedAccountKeys = Array.from(highProfitByAccountCombination.keys()).sort();
 
-    let notificationBody = `P&L: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(0)}%) | Day: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(0)}%)`;
+    // Build notification body
+    let mobileBody = `P&L: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(0)}%) | Day: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(0)}%)`;
+    mobileBody += `\nStocks : ${stockProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${stockProfitPercent.toFixed(1)}%) II ETF: ${etfProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${etfProfitPercent.toFixed(1)}%)`;
 
-    notificationBody += `\nStocks : ${stockProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${stockProfitPercent.toFixed(1)}%) II ETF: ${etfProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${etfProfitPercent.toFixed(1)}%)`;
+    let telegramBody = `P&L: ₹${totalProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${profitPercent.toFixed(0)}%) | Day: ₹${overallDayChange.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${dayChangePercent.toFixed(0)}%)`;
+    telegramBody += `\nStocks : ${stockProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${stockProfitPercent.toFixed(1)}%) II ETF: ${etfProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} (${etfProfitPercent.toFixed(1)}%)`;
 
     if (highProfitRegularStocks.length > 0) {
-      notificationBody += `\n🔥 High Profit (${highProfitRegularStocks.length}):`;
+      const highProfitHeader = `\n🔥 High Profit% (${highProfitRegularStocks.length}):`;
+      mobileBody += highProfitHeader;
+      telegramBody += `\n\n${highProfitHeader.trim()}`;
       
       sortedAccountKeys.forEach(accountKey => {
         const stocks = highProfitByAccountCombination.get(accountKey);
         // Sort stocks within account grouping by profit percent
         stocks.sort((a, b) => b.profitPercent - a.profitPercent);
         
-        notificationBody += `\nAccount Name ${accountKey}`;
+        mobileBody += `\nAccount Name ${accountKey}`;
+        telegramBody += `\n\nAccount Name ${accountKey}`;
+        
         stocks.forEach(s => {
-          notificationBody += `\n• ${s.stockName}: ${s.profitPercent.toFixed(0)}% (C:${s.cmp.toFixed(0)}, A:${s.avgBuyPrice.toFixed(0)})`;
+          const line = `\n• ${s.stockName}: ${s.profitPercent.toFixed(0)}% (C:${s.cmp.toFixed(0)}, A:${s.avgBuyPrice.toFixed(0)})`;
+          mobileBody += line;
+          telegramBody += line;
         });
       });
     }
@@ -408,7 +439,10 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
         .eq('status', 'active');
 
       if (!bonusError && bonusActions && bonusActions.length > 0) {
-        notificationBody += '\n⚡ Action Today:';
+        const actionHeader = '\n⚡ Action Today:';
+        mobileBody += actionHeader;
+        telegramBody += `\n\n<b>${actionHeader.trim()}</b>`;
+        
         // Use unique actions (different sources might have same action)
         const uniqueActions = [];
         const seen = new Set();
@@ -421,7 +455,9 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
         });
 
         uniqueActions.forEach(a => {
-          notificationBody += `\n• ${a.stock_name}: ${a.type} (${a.ratio})`;
+          const line = `\n• ${a.stock_name}: ${a.type} (${a.ratio})`;
+          mobileBody += line;
+          telegramBody += line;
         });
       }
     } catch (e) {
@@ -430,7 +466,7 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
 
     const payload = {
       title: 'Portfolio Update',
-      body: notificationBody,
+      body: mobileBody,
       icon: '/mainphoto.png',
       badge: '/logo192.png',
       data: {
@@ -438,11 +474,23 @@ export async function triggerPortfolioUpdate(force = false, threshold = null) {
       }
     };
 
-    // Send notifications in parallel so failure in one doesn't stop the other
-    const results = await Promise.allSettled([
-      sendPushNotification(payload),
-      sendTelegramAlert(payload)
-    ]);
+    const telegramPayload = {
+      ...payload,
+      body: telegramBody
+    };
+
+    // Send notifications in parallel based on type
+    const notificationPromises = [];
+    
+    if ((type === 'all' || type === 'mobile') && !skipMobile) {
+      notificationPromises.push(sendPushNotification(payload));
+    }
+    
+    if ((type === 'all' || type === 'telegram') && notificationState.isTelegramEnabled !== false && !skipTelegram) {
+      notificationPromises.push(sendTelegramAlert(telegramPayload));
+    }
+
+    const results = await Promise.allSettled(notificationPromises);
 
     results.forEach((res, idx) => {
       if (res.status === 'rejected') {
@@ -473,11 +521,16 @@ export async function sendAngelOneStatusNotification({ success, message, timesta
       }
     };
 
+    // Refresh settings before sending status notification
+    await fetchNotificationSettings();
+
     // Send notifications in parallel
-    const results = await Promise.allSettled([
-      sendPushNotification(payload),
-      sendTelegramAlert(payload)
-    ]);
+    const notificationPromises = [sendPushNotification(payload)];
+    if (notificationState.isTelegramEnabled !== false) {
+      notificationPromises.push(sendTelegramAlert(payload));
+    }
+
+    const results = await Promise.allSettled(notificationPromises);
 
     results.forEach((res, idx) => {
       if (res.status === 'rejected') {
