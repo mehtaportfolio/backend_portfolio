@@ -25,15 +25,27 @@ function generateYahooVariants(dbSymbol) {
 
   variants.push(baseYahoo);
 
+  // If no suffix, try common Indian suffixes
+  if (!baseYahoo.includes(".")) {
+    variants.push(baseYahoo + ".NS");
+    variants.push(baseYahoo + ".BO");
+  }
+
   // SME alternative
   if (baseYahoo.endsWith(".NS")) variants.push(baseYahoo.replace(".NS", "-SM.NS"));
   if (baseYahoo.endsWith(".BO")) variants.push(baseYahoo.replace(".BO", "-SM.BO"));
+  
+  // Also try -SM for those we just added
+  if (!baseYahoo.includes(".")) {
+    variants.push(baseYahoo + "-SM.NS");
+    variants.push(baseYahoo + "-SM.BO");
+  }
 
   // Try switching NSE/BSE if first fails
   if (baseYahoo.endsWith(".NS")) variants.push(baseYahoo.replace(".NS", ".BO"));
   if (baseYahoo.endsWith(".BO")) variants.push(baseYahoo.replace(".BO", ".NS"));
 
-  return variants;
+  return [...new Set(variants)]; // Unique variants
 }
 
 /**
@@ -73,55 +85,55 @@ export async function runYahooPriceFixService() {
       const batch = stocks.slice(i, i + batchSize);
       console.log(`⚡ [YahooPriceFix] Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(stocks.length / batchSize)}`);
 
-      await Promise.all(batch.map(async (stock) => {
+      for (const stock of batch) {
         const dbSymbol = stock.symbol;
         const stockName = stock.stock_name || null;
         let yfData = null;
+        let lastError = null;
 
         const variants = generateYahooVariants(dbSymbol);
 
         // Try each variant until valid CMP is found
         for (const sym of variants) {
           try {
-            // Using yf.quote which is standard in yahoo-finance2 v2/v3
             yfData = await yf.quote(sym);
             if (yfData && yfData.regularMarketPrice != null) break;
           } catch (err) {
+            lastError = err.message;
             // Silently fail for variants, common to have 404s
           }
         }
 
         if (!yfData || yfData.regularMarketPrice == null) {
+          console.log(`❌ [YahooPriceFix] Failed ${dbSymbol} after trying all variants. Last error: ${lastError}`);
           failedSymbols.push({ symbol: dbSymbol, name: stockName });
-          return;
-        }
-
-        const cmpVal = yfData.regularMarketPrice ?? 0;
-        const lcpVal = yfData.regularMarketPreviousClose ?? 0;
-
-        if (cmpVal === 0 || lcpVal === 0) {
-          zeroValues++;
-        }
-
-        // Only update if we have a valid non-zero CMP to avoid overwriting with 0 if possible
-        // but the requirement says only update records where CMP/LCP is missing or zero.
-        // If we found a 0 value from Yahoo, we still update if the current value is null/0.
-        
-        const { error: updateError } = await supabase
-          .from("stock_master")
-          .update({ 
-            cmp: cmpVal, 
-            lcp: lcpVal,
-            updated_at: new Date().toISOString() 
-          })
-          .eq("symbol", dbSymbol);
-
-        if (updateError) {
-          console.error(`❌ [YahooPriceFix] Failed to update ${dbSymbol}:`, updateError.message);
         } else {
-          totalUpdated++;
+          const cmpVal = yfData.regularMarketPrice ?? 0;
+          const lcpVal = yfData.regularMarketPreviousClose ?? 0;
+
+          if (cmpVal === 0 || lcpVal === 0) {
+            zeroValues++;
+          }
+
+          const { error: updateError } = await supabase
+            .from("stock_master")
+            .update({ 
+              cmp: cmpVal, 
+              lcp: lcpVal,
+              updated_at: new Date().toISOString() 
+            })
+            .eq("symbol", dbSymbol);
+
+          if (updateError) {
+            console.error(`❌ [YahooPriceFix] Failed to update ${dbSymbol}:`, updateError.message);
+          } else {
+            totalUpdated++;
+          }
         }
-      }));
+
+        // Small delay between each stock to be very gentle
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
 
       // Add a small delay between batches to respect API rate limits
       if (i + batchSize < stocks.length) {
