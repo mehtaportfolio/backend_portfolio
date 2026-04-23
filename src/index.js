@@ -206,7 +206,7 @@ app.use('/api/zerodha', zerodhaRoutes);
 // ✅ Add direct kite callback route (Zerodha's expected redirect URL)
 const { zerodhaCallback } = await import('./services/zerodhaService.js');
 const { startCorpActionService } = await import('./services/corpActionService/index.js');
-const { runYahooPriceFixService } = await import('./services/yahooPriceFixService.js');
+const { runAngelPriceFixService } = await import('./services/angelPriceFixService.js');
 const { initNSEIndexUpdater } = await import('./services/nseIndexUpdater/scheduler.js');
 app.get('/kite/callback', zerodhaCallback);
 
@@ -221,12 +221,12 @@ app.get('/api/run-corp-actions', async (req, res) => {
   }
 });
 
-// 🔹 Yahoo Price Fix manual trigger route
-app.get('/api/run-yahoo-fix', async (req, res) => {
+// 🔹 Angel Price Fix manual trigger route
+app.get('/api/run-angel-fix', async (req, res) => {
   try {
     // Run in background
-    runYahooPriceFixService();
-    res.json({ status: 'success', message: 'Yahoo Price Fix background service started' });
+    runAngelPriceFixService();
+    res.json({ status: 'success', message: 'Angel One Price Fix background service started' });
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
   }
@@ -397,11 +397,11 @@ app.post('/indices/restart', async (req, res) => {
   }
 });
 
-app.post('/yahoo-price/trigger', async (req, res) => {
+app.post('/angel-price/trigger', async (req, res) => {
   try {
     // Run in background
-    runYahooPriceFixService();
-    res.json({ status: 'success', message: 'Internal Yahoo Price Fix service triggered' });
+    runAngelPriceFixService();
+    res.json({ status: 'success', message: 'Internal Angel One Price Fix service triggered' });
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
   }
@@ -457,9 +457,9 @@ console.log(`🚀 Server running on port ${PORT}`);
     startCorpActionService();
   });
 
-  // 🕒 Yahoo Price Fix - Scheduled (Every 6 hours)
+  // 🕒 Angel One Price Fix - Scheduled (Every 6 hours)
   cron.schedule('0 */6 * * *', () => {
-    console.log('⏰ [Cron] Triggering Yahoo Price Fix Service...');
-    runYahooPriceFixService();
+    console.log('⏰ [Cron] Triggering Angel One Price Fix Service...');
+    runAngelPriceFixService();
   });
 });

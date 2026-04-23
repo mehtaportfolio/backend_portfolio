@@ -6,9 +6,18 @@ import { supabase } from '../db/supabaseClient.js';
 
 const MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json";
 
-let smartApi = new SmartAPI({
-    api_key: (process.env.ANGEL_API_KEY || '').trim(),
-});
+export let smartApi = null;
+
+/**
+ * Ensure smartApi is initialized
+ */
+function ensureSmartApi() {
+    if (!smartApi) {
+        smartApi = new SmartAPI({
+            api_key: (process.env.ANGEL_API_KEY || '').trim(),
+        });
+    }
+}
 
 let sessionData = null;
 let isLoggingIn = false;
@@ -44,6 +53,7 @@ export function isMarketHours() {
  * Login to Angel One
  */
 export async function login() {
+    ensureSmartApi();
     if (isLoggingIn && loginPromise) {
         log('Login already in progress, awaiting existing promise...');
         return loginPromise;
@@ -62,7 +72,7 @@ export async function login() {
             }
 
             const otp = authenticator.generate(totpSecret);
-            log(`Attempting login for ${clientId}...`);
+            log(`Attempting login for ${clientId} with API Key: ${smartApi.api_key}...`);
 
             const response = await smartApi.generateSession(clientId, password, otp);
 
@@ -79,9 +89,7 @@ export async function login() {
                 const errorMsg = response.message || 'Empty response message';
                 const errorCode = response.errorcode || 'No error code';
                 log(`Login failed: ${errorMsg} (Code: ${errorCode})`, 'ERROR');
-                if (!response.status) {
-                    log(`Full Error Response: ${JSON.stringify(response)}`, 'DEBUG');
-                }
+                log(`Full Response: ${JSON.stringify(response)}`, 'DEBUG');
                 return { success: false, message: errorMsg };
             }
         } catch (error) {
@@ -176,6 +184,7 @@ export async function refreshStockSymbols() {
  * Helper to fetch market data in chunks
  */
 async function fetchMarketDataChunked(exchangeTokens) {
+    ensureSmartApi();
     const CHUNK_SIZE = 50;
     const allFetchedData = [];
     const exchanges = Object.keys(exchangeTokens);
@@ -326,6 +335,7 @@ export async function syncMarketData() {
  * Fetch and store today's buy trades
  */
 export async function fetchTodayBuyTrades() {
+    ensureSmartApi();
     if (!sessionData) {
         const loginResult = await login();
         if (!loginResult.success) return;
