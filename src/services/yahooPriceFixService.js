@@ -29,6 +29,11 @@ function generateYahooVariants(dbSymbol) {
   if (!baseYahoo.includes(".")) {
     variants.push(baseYahoo + ".NS");
     variants.push(baseYahoo + ".BO");
+    
+    // Check for Index patterns (e.g., HDFCSML250 -> ^NSESML250 or similar)
+    // HDFCSML250 is often used for Nifty Smallcap 250 Index
+    if (baseYahoo.includes("SML250")) variants.push("^NSESML250");
+    if (baseYahoo.includes("MID100")) variants.push("^NSEMDCP100");
   }
 
   // SME alternative
@@ -45,6 +50,11 @@ function generateYahooVariants(dbSymbol) {
   if (baseYahoo.endsWith(".NS")) variants.push(baseYahoo.replace(".NS", ".BO"));
   if (baseYahoo.endsWith(".BO")) variants.push(baseYahoo.replace(".BO", ".NS"));
 
+  // If it's still failing and looks like a symbol that might be an index
+  if (!baseYahoo.startsWith("^") && baseYahoo.length > 3) {
+    variants.push("^" + baseYahoo);
+  }
+
   return [...new Set(variants)]; // Unique variants
 }
 
@@ -55,11 +65,30 @@ export async function runYahooPriceFixService() {
   try {
     console.log("🔍 [YahooPriceFix] Starting background service to check missing CMP/LCP...");
 
-    // Fetch missing rows (cmp or lcp null or 0)
-    // We limit to 1000 to avoid excessive processing in one go
+    // 1. Get list of unique traded stock names to reduce scope
+    const { data: tradedStocks, error: txnError } = await supabase
+      .from("stock_transactions")
+      .select("stock_name");
+
+    if (txnError) {
+      console.error("❌ [YahooPriceFix] Error fetching traded stocks:", txnError.message);
+      return { status: 'error', message: txnError.message };
+    }
+
+    const uniqueTradedNames = [...new Set(tradedStocks.map(t => t.stock_name))].filter(Boolean);
+    console.log(`📊 [YahooPriceFix] Found ${uniqueTradedNames.length} unique traded stocks in transactions.`);
+
+    if (uniqueTradedNames.length === 0) {
+      console.log("ℹ️ [YahooPriceFix] No traded stocks found to update.");
+      return { status: 'success', message: "No traded stocks found." };
+    }
+
+    // 2. Fetch missing rows from stock_master that are in the traded list
+    // We check for null, 0, or blank CMP/LCP
     const { data: stocks, error } = await supabase
       .from("stock_master")
       .select("symbol, stock_name")
+      .in("stock_name", uniqueTradedNames)
       .or("cmp.is.null,cmp.eq.0,lcp.is.null,lcp.eq.0")
       .limit(1000);
 
@@ -69,13 +98,13 @@ export async function runYahooPriceFixService() {
     }
 
     if (!stocks || stocks.length === 0) {
-      console.log("ℹ️ [YahooPriceFix] No stocks found with missing CMP/LCP.");
-      return { status: 'success', message: "No missing stocks found." };
+      console.log("ℹ️ [YahooPriceFix] No traded stocks found in stock_master with missing CMP/LCP.");
+      return { status: 'success', message: "No missing stocks for traded entities found." };
     }
 
-    console.log(`📊 [YahooPriceFix] Found ${stocks.length} stocks missing CMP/LCP`);
+    console.log(`📊 [YahooPriceFix] Found ${stocks.length} traded stocks missing CMP/LCP in master table.`);
 
-    const batchSize = 50; // Smaller batch size to be safe and avoid rate limits
+    const batchSize = 50; 
     let totalUpdated = 0;
     let zeroValues = 0;
     const failedSymbols = [];
@@ -100,7 +129,19 @@ export async function runYahooPriceFixService() {
             if (yfData && yfData.regularMarketPrice != null) break;
           } catch (err) {
             lastError = err.message;
-            // Silently fail for variants, common to have 404s
+            
+            // Handle 429 Too Many Requests
+            if (err.message.includes("429") || err.message.toLowerCase().includes("too many requests")) {
+              console.warn(`⚠️ [YahooPriceFix] Rate limited (429) at ${sym}. Waiting 60 seconds...`);
+              await new Promise(resolve => setTimeout(resolve, 60000));
+              // Retry once for this variant after cooldown
+              try {
+                yfData = await yf.quote(sym);
+                if (yfData && yfData.regularMarketPrice != null) break;
+              } catch (retryErr) {
+                lastError = retryErr.message;
+              }
+            }
           }
         }
 
@@ -131,13 +172,13 @@ export async function runYahooPriceFixService() {
           }
         }
 
-        // Small delay between each stock to be very gentle
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Delay between each stock to avoid 429
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
-      // Add a small delay between batches to respect API rate limits
+      // Delay between batches
       if (i + batchSize < stocks.length) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
     }
 
