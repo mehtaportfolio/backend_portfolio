@@ -63,7 +63,7 @@ export async function runYahooPriceFixService() {
 
     console.log(`📊 [YahooPriceFix] Found ${stocks.length} stocks missing CMP/LCP`);
 
-    const batchSize = 25; // Smaller batch size to be safe and avoid rate limits
+    const batchSize = 50; // Smaller batch size to be safe and avoid rate limits
     let totalUpdated = 0;
     let zeroValues = 0;
     const failedSymbols = [];

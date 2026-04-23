@@ -13,13 +13,13 @@ export async function updateGoogleSheet(indexData) {
     return;
   }
 
-  const auth = new google.auth.GoogleAuth({
-    credentials: {
-      client_email: CLIENT_EMAIL,
-      private_key: PRIVATE_KEY,
-    },
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
+ const auth = new google.auth.GoogleAuth({
+  credentials: {
+    client_email: CLIENT_EMAIL,
+    private_key: PRIVATE_KEY.replace(/\\n/g, "\n"),
+  },
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
 
   const sheets = google.sheets({ version: "v4", auth });
 
