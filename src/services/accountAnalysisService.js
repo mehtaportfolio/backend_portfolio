@@ -1,0 +1,262 @@
+import { fetchUserAllData } from '../db/queries.js';
+import { calculateStockLots, calculateMFLots } from './lotCalculator.js';
+import { calculateNPSHoldings } from './aggregationService.js';
+import { buildCMPMaps } from './dashboardService.js';
+
+const toNumber = (value) => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (value == null) return 0;
+  const parsed = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const formatAccountName = (name) => {
+  const trimmed = String(name ?? '').trim();
+  return trimmed || 'Other Accounts';
+};
+
+const ASSET_LABELS = {
+  stock: 'stocks',
+  etf: 'etf',
+  mf: 'mf',
+  nps: 'nps',
+};
+
+const canonicalizeAssetType = (assetType = '') => {
+  const normalized = String(assetType || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_');
+
+  switch (normalized) {
+    case 'stock':
+    case 'stocks':
+    case 'equity':
+      return 'stocks';
+    case 'etf':
+    case 'exchange_traded_fund':
+      return 'etf';
+    case 'mutual_fund':
+    case 'mutualfund':
+    case 'mf':
+      return 'mf';
+    case 'nps':
+      return 'nps';
+    default:
+      return normalized || 'other';
+  }
+};
+
+const normalizeHoldings = (holdings = []) => {
+  return holdings.map((holding) => ({
+    ...holding,
+    invested: toNumber(holding.invested),
+    marketValue: toNumber(holding.marketValue),
+  }));
+};
+
+const sumByAccount = (accumulator, accountName, assetType, invested, marketValue, dayChange = 0) => {
+  const normalizedAccount = formatAccountName(accountName);
+  // Exclude BDM accounts
+  if (normalizedAccount.toUpperCase() === 'BDM') {
+    return;
+  }
+  
+  if (!accumulator.has(normalizedAccount)) {
+    accumulator.set(normalizedAccount, {
+      account_name: normalizedAccount,
+      total_invested: 0,
+      total_market_value: 0,
+      total_day_change: 0,
+      breakdown: {},
+    });
+  }
+
+  const accountTotals = accumulator.get(normalizedAccount);
+  accountTotals.total_invested += invested;
+  accountTotals.total_market_value += marketValue;
+  accountTotals.total_day_change += dayChange;
+
+  const breakdownKey = canonicalizeAssetType(assetType);
+  if (!accountTotals.breakdown[breakdownKey]) {
+    accountTotals.breakdown[breakdownKey] = { invested: 0, marketValue: 0, dayChange: 0 };
+  }
+
+  accountTotals.breakdown[breakdownKey].invested += invested;
+  accountTotals.breakdown[breakdownKey].marketValue += marketValue;
+  accountTotals.breakdown[breakdownKey].dayChange += dayChange;
+};
+
+const attachProfitFields = (accounts = []) => {
+  return accounts.map((account) => {
+    const profit = account.total_market_value - account.total_invested;
+    return {
+      ...account,
+      profit,
+      profitPercent: account.total_invested > 1e-8 ? (profit / account.total_invested) * 100 : 0,
+      dayChangePercent: (account.total_market_value - account.total_day_change) > 1e-8 ? (account.total_day_change / (account.total_market_value - account.total_day_change)) * 100 : 0,
+    };
+  });
+};
+
+const buildAssetSummary = (accounts) => {
+  const summary = {
+    stock: { invested: 0, marketValue: 0, dayChange: 0 },
+    etf: { invested: 0, marketValue: 0, dayChange: 0 },
+    mf: { invested: 0, marketValue: 0, dayChange: 0 },
+    nps: { invested: 0, marketValue: 0, dayChange: 0 },
+  };
+
+  accounts.forEach((account) => {
+    Object.entries(account.breakdown).forEach(([assetType, values]) => {
+      const key = canonicalizeAssetType(assetType);
+      if (!summary[key]) return;
+      summary[key].invested += values.invested;
+      summary[key].marketValue += values.marketValue;
+      summary[key].dayChange += (values.dayChange || 0);
+    });
+  });
+
+  return summary;
+};
+
+export async function getAccountAnalysis(supabase, priceSource = 'stock_master') {
+  if (!supabase) {
+    throw new Error('Supabase client is required');
+  }
+
+  const data = await fetchUserAllData(supabase, priceSource);
+
+  const { stockCmpMap, stockLcpMap, fundCmpMap, fundLcpMap, npsCmpMap, npsLcpMap } = buildCMPMaps(data);
+
+  const stockLots = calculateStockLots(data.stock_transactions?.data, stockCmpMap);
+  const mfLots = calculateMFLots(data.mf_transactions?.data, fundCmpMap);
+  const npsHoldings = calculateNPSHoldings(data.nps_transactions?.data, npsCmpMap);
+
+  const accountsMap = new Map();
+
+  // Stocks & ETFs (open lots only from calculateStockLots)
+  normalizeHoldings(stockLots.holdings).forEach((holding) => {
+    const isEtf = holding.equityType === 'etf' || 
+                  holding.accountType === 'ETF' || 
+                  ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => String(holding.stockName || '').toUpperCase().includes(p));
+    const assetLabel = isEtf ? 'etf' : 'stocks';
+
+    const accountName = holding.accountName;
+    const lcp = stockLcpMap.get(holding.stockName) || 0;
+    const dayChange = lcp > 0 ? holding.quantity * (holding.cmp - lcp) : 0;
+
+    sumByAccount(
+      accountsMap,
+      accountName,
+      assetLabel,
+      holding.invested,
+      holding.marketValue,
+      dayChange
+    );
+  });
+
+  // Mutual Funds
+  normalizeHoldings(mfLots.holdings).forEach((holding) => {
+    const lcp = fundLcpMap.get(holding.fundName) || 0;
+    const dayChange = lcp > 0 ? holding.units * (holding.cmp - lcp) : 0;
+
+    sumByAccount(
+      accountsMap,
+      holding.accountName,
+      ASSET_LABELS.mf,
+      holding.invested,
+      holding.marketValue,
+      dayChange
+    );
+  });
+
+  // NPS (calculateNPSHoldings already deducts charges)
+  (npsHoldings.holdings || []).forEach((holding) => {
+    const invested = toNumber(holding.invested);
+    const marketValue = toNumber(holding.marketValue);
+    const lcp = npsLcpMap.get(holding.schemeName) || 0;
+    const dayChange = lcp > 0 ? holding.units * (holding.cmp - lcp) : 0;
+
+    sumByAccount(
+      accountsMap,
+      holding.accountName,
+      ASSET_LABELS.nps,
+      invested,
+      marketValue,
+      dayChange
+    );
+  });
+
+  const accounts = attachProfitFields(Array.from(accountsMap.values()));
+  accounts.sort((a, b) => b.total_market_value - a.total_market_value);
+
+  const assetSummary = buildAssetSummary(accounts);
+
+  const totals = {
+    totalInvested: accounts.reduce((sum, account) => sum + account.total_invested, 0),
+    totalMarketValue: accounts.reduce((sum, account) => sum + account.total_market_value, 0),
+    totalDayChange: accounts.reduce((sum, account) => sum + account.total_day_change, 0),
+  };
+  const totalProfit = totals.totalMarketValue - totals.totalInvested;
+
+  const normalizeBreakdown = (rawBreakdown = {}) => {
+    const normalized = {};
+    Object.entries(rawBreakdown).forEach(([assetType, values]) => {
+      const key = canonicalizeAssetType(assetType);
+      const prevMarketValue = values.marketValue - values.dayChange;
+      normalized[key] = {
+        invested: toNumber(values.invested),
+        marketValue: toNumber(values.marketValue),
+        dayChange: toNumber(values.dayChange),
+        dayChangePercent: prevMarketValue > 1e-8 ? (values.dayChange / prevMarketValue) * 100 : 0,
+      };
+    });
+    return normalized;
+  };
+
+  const normalizedAccounts = accounts.map((account) => ({
+    accountName: account.account_name,
+    account_name: account.account_name,
+    totalInvested: account.total_invested,
+    total_invested: account.total_invested,
+    totalMarketValue: account.total_market_value,
+    total_market_value: account.total_market_value,
+    profit: account.profit,
+    profitPercent: account.profitPercent,
+    dayChange: account.total_day_change,
+    dayChangePercent: account.dayChangePercent,
+    breakdown: normalizeBreakdown(account.breakdown),
+  }));
+
+  const otherAccountsSource = accounts.find((account) => account.account_name === 'Other Accounts');
+  const normalizedOtherAccounts = otherAccountsSource
+    ? {
+        totalInvested: otherAccountsSource.total_invested,
+        total_invested: otherAccountsSource.total_invested,
+        totalMarketValue: otherAccountsSource.total_market_value,
+        total_market_value: otherAccountsSource.total_market_value,
+        dayChange: otherAccountsSource.total_day_change,
+        dayChangePercent: otherAccountsSource.dayChangePercent,
+        breakdown: normalizeBreakdown(otherAccountsSource.breakdown),
+      }
+    : { totalInvested: 0, total_invested: 0, totalMarketValue: 0, total_market_value: 0, dayChange: 0, dayChangePercent: 0, breakdown: {} };
+
+  return {
+    accountWise: normalizedAccounts,
+    accounts: normalizedAccounts,
+    otherAccounts: normalizedOtherAccounts,
+    assetSummary,
+    totals: {
+      invested: totals.totalInvested,
+      marketValue: totals.totalMarketValue,
+      profit: totalProfit,
+      profitPercent: totals.totalInvested > 1e-8 ? (totalProfit / totals.totalInvested) * 100 : 0,
+      dayChange: totals.totalDayChange,
+      dayChangePercent: (totals.totalMarketValue - totals.totalDayChange) > 1e-8 ? (totals.totalDayChange / (totals.totalMarketValue - totals.totalDayChange)) * 100 : 0,
+    },
+    timestamp: new Date().toISOString(),
+  };
+}

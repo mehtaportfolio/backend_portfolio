@@ -1,0 +1,14 @@
+{
+  "users": {
+    "mehtaportfolio28@gmail.com": {
+      "challenge": "VcUGCTW7J5sC2MHMMmbBCQ-VZwRlbR8s5pAThZZV21OMaxnAa5q1LGViJUTi0tNmpWbpV25To8oJa_GWhtem5w",
+      "userId": "mEsyegVivGcHqWOxI3CfRw",
+      "credential": {
+        "id": "Ry15YndWNjQzclpCUFZ3T1l0cHh3UQ",
+        "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEJ481pichzJ+XsyPvyriPsZEUtgEq\nEn+Ust87tQDXI0cVjK5S5X014BPGMjESzyy/r2bfjtVGCJjjvvGXbbTljA==\n-----END PUBLIC KEY-----\n",
+        "counter": 0
+      },
+      "assertionChallenge": "lLhS0Wwl1DQqBFdccGgbOnCmQDIeJz4oNpmy0RakXm1G7RSvPQPiDLAXWLkJbVUgRQdUi61jtHcGAAjWlANIXA"
+    }
+  }
+}

@@ -1,0 +1,1618 @@
+import { fetchAllRows } from '../db/queries.js';
+import { supabase } from '../db/supabaseClient.js';
+
+const toNumber = (value) => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (value == null) return 0;
+  const parsed = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const normalizeDate = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return null;
+  }
+  return date.toISOString();
+};
+
+const normalizeType = (value = '') => {
+  const lowered = value.toLowerCase();
+  const types = ['buy', 'purchase', 'sip', 'contribution', 'sell', 'redeem', 'switch out', 'switch in', 'withdraw', 'charges', 'interest'];
+  return types.find((label) => lowered.includes(label)) || lowered;
+};
+
+const MF_BUY_KEYWORDS = [
+  'buy',
+  'purchase',
+  'sip',
+  'switch in',
+  'switch-in',
+  'contribution',
+  'allotment',
+  'dividend',
+  'stp in',
+  'stp-in',
+];
+
+const MF_FIFO_SALE_KEYWORDS = [
+  'sell',
+  'redeem',
+  'redeemption',
+  'withdraw',
+  'withdrawal',
+  'switch out',
+  'switch-out',
+  'switch to',
+  'switch-to',
+  'stp out',
+  'stp-out',
+  'charges',
+  'exit',
+  'migration',
+  'transfer',
+  'payout',
+];
+
+const normalizeMfTransactionType = (rawType, units) => {
+  const rawText = String(rawType ?? '').trim().toLowerCase();
+  const normalizedUnits = Number.isFinite(units) ? units : null;
+
+  if (!rawText) {
+    if (normalizedUnits !== null) {
+      if (normalizedUnits < 0) return 'sell';
+      if (normalizedUnits > 0) return 'buy';
+    }
+    return null;
+  }
+
+  const normalizedText = rawText.replace(/\s+/g, ' ');
+
+  if (MF_FIFO_SALE_KEYWORDS.some((keyword) => normalizedText.includes(keyword))) {
+    return 'sell';
+  }
+
+  if (MF_BUY_KEYWORDS.some((keyword) => normalizedText.includes(keyword))) {
+    return 'buy';
+  }
+
+  if (normalizedText.includes('charge') || normalizedText.includes('fee') || normalizedText.includes('tax')) {
+    return 'charges';
+  }
+
+  if (normalizedUnits !== null) {
+    if (normalizedUnits < 0) return 'sell';
+    if (normalizedUnits > 0) return 'buy';
+  }
+
+  return null;
+};
+
+const parseMfTransactionDate = (value) => {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+  const date = new Date(normalized);
+  if (!Number.isNaN(date.getTime())) {
+    return date;
+  }
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric)) {
+    const epochDate = new Date(numeric);
+    if (!Number.isNaN(epochDate.getTime())) {
+      return epochDate;
+    }
+  }
+  return null;
+};
+
+const sortLotsFifo = (lots) => {
+  lots.sort((a, b) => {
+    const orderDiff = (a.order ?? Number.POSITIVE_INFINITY) - (b.order ?? Number.POSITIVE_INFINITY);
+    if (Math.abs(orderDiff) > 1e-8) {
+      return orderDiff;
+    }
+    return (a.sequence ?? 0) - (b.sequence ?? 0);
+  });
+};
+
+const consumeLots = (lots, unitsToRemove) => {
+  let remaining = unitsToRemove;
+  const consumed = [];
+  sortLotsFifo(lots);
+
+  while (remaining > 1e-8 && lots.length) {
+    const currentLot = lots[0];
+    if (!currentLot || currentLot.units <= 1e-8) {
+      lots.shift();
+      continue;
+    }
+
+    const available = currentLot.units;
+    const deduction = Math.min(remaining, available);
+    const costPerUnit = available > 1e-8 ? currentLot.cost / available : currentLot.nav || 0;
+    const costPortion = deduction * costPerUnit;
+
+    consumed.push({
+      units: deduction,
+      cost: costPortion,
+      buyDate: currentLot.date ? currentLot.date.toISOString() : null,
+      nav: currentLot.nav,
+      costPerUnit,
+      accountName: currentLot.accountName,
+      originalLot: currentLot,
+    });
+
+    currentLot.units -= deduction;
+    currentLot.cost -= costPortion;
+
+    if (currentLot.units <= 1e-8 || currentLot.cost <= 1e-8) {
+      lots.shift();
+    }
+
+    remaining -= deduction;
+  }
+
+  return { consumed, remaining };
+};
+
+const XIRR_MS_PER_YEAR = 1000 * 60 * 60 * 24 * 365;
+
+const calculateXirr = (flows) => {
+  if (!flows || flows.length < 2) return 0;
+  const cashflows = flows
+    .map((cf) => ({ amount: Number(cf.amount), date: new Date(cf.date) }))
+    .filter(
+      (cf) =>
+        Number.isFinite(cf.amount) &&
+        cf.amount !== 0 &&
+        cf.date instanceof Date &&
+        !Number.isNaN(cf.date.valueOf()),
+    )
+    .sort((a, b) => a.date - b.date);
+
+  if (!cashflows.length) return 0;
+
+  const baseDate = cashflows[0].date;
+  const npv = (rate) =>
+    cashflows.reduce(
+      (acc, cf) => acc + cf.amount / Math.pow(1 + rate, (cf.date - baseDate) / XIRR_MS_PER_YEAR),
+      0,
+    );
+
+  let low = -0.9999;
+  let high = 100;
+  let mid = 0;
+
+  for (let i = 0; i < 100; i += 1) {
+    mid = (low + high) / 2;
+    const value = npv(mid);
+    if (Math.abs(value) < 1e-6) {
+      return mid * 100;
+    }
+    if (value > 0) {
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+
+  return mid * 100;
+};
+
+export async function getTodayTopGainersLosersDayChange({ supabase, priceSource = 'stock_master', limit = 5 }) {
+  try {
+    // --- OPEN POSITIONS ---
+    const openTxns = await fetchAllRows(supabase, 'stock_transactions', {
+      select: 'stock_name, quantity, sell_date, equity_type',
+      // Supabase filter syntax is implemented inside fetchAllRows.
+      filters: [q => q.is('sell_date', null)],
+    });
+
+    const txns = openTxns?.data || openTxns || [];
+    if (!Array.isArray(txns) || txns.length === 0) {
+      return {
+        todayGainersAbs: [],
+        todayGainersPct: [],
+        todayLosersAbs: [],
+        todayLosersPct: [],
+      };
+    }
+
+
+    const distinct = [...new Set((txns || []).map(t => String(t.stock_name || '').trim()).filter(Boolean))];
+    if (distinct.length === 0) {
+      return {
+        todayGainersAbs: [],
+        todayGainersPct: [],
+        todayLosersAbs: [],
+        todayLosersPct: [],
+      };
+    }
+
+    // Map of stock_name -> total quantity (open)
+    const qtyByStock = distinct.reduce((acc, name) => {
+      const rows = txns.filter(t => String(t.stock_name || '').trim() === name);
+      acc[name.toUpperCase()] = rows.reduce((s, r) => s + toNumber(r.quantity), 0);
+      return acc;
+    }, {});
+
+    // Resolve cmp/lcp source
+    let cmpByStock = {};
+    let lcpByStock = {};
+
+    const table = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
+
+    if (priceSource === 'live') {
+      // cmp from live ticks are already stored in stock_master/stock_mapping cmp in most deployments.
+      // Your spec says ws LTP for cmp; if live ticks are not persisted, backend can't read them.
+      // We use table.cmp as a best-effort approximation for cmp and keep lcp from lcp column.
+      const { data: masters } = await fetchAllRows(supabase, table, {
+        select: 'stock_name, cmp, lcp',
+      });
+      (masters || []).forEach(m => {
+        const key = String(m.stock_name || '').trim().toUpperCase();
+        cmpByStock[key] = toNumber(m.cmp);
+        lcpByStock[key] = toNumber(m.lcp);
+      });
+    } else {
+      const { data: masters } = await fetchAllRows(supabase, table, {
+        select: 'stock_name, cmp, lcp',
+      });
+      (masters || []).forEach(m => {
+        const key = String(m.stock_name || '').trim().toUpperCase();
+        cmpByStock[key] = toNumber(m.cmp);
+        lcpByStock[key] = toNumber(m.lcp);
+      });
+    }
+
+    const evaluated = distinct.map(name => {
+      const key = name.toUpperCase();
+      const qty = toNumber(qtyByStock[key]);
+      const cmp = toNumber(cmpByStock[key]);
+      const lcp = toNumber(lcpByStock[key]);
+
+      const dayChangeAbs = qty * (cmp - lcp);
+      const base = qty * lcp;
+      const dayChangePct = base > 1e-12 ? (dayChangeAbs / base) * 100 : 0;
+
+      return {
+        name,
+        profit: dayChangeAbs,
+        percent: dayChangePct,
+        // provide fields consumed by UI summary calculations
+        marketValue: qty * cmp,
+        invested: qty * lcp,
+        dayChangeAbs,
+        dayChangePct,
+        quantity: qty,
+      };
+    });
+
+    const gainersAbs = evaluated.filter(x => x.profit >= 0).sort((a,b)=>b.profit-a.profit).slice(0, limit);
+    const losersAbs = evaluated.filter(x => x.profit < 0).sort((a,b)=>a.profit-b.profit).slice(0, limit);
+
+    const gainersPct = evaluated.filter(x => x.percent >= 0).sort((a,b)=>b.percent-a.percent).slice(0, limit);
+    const losersPct = evaluated.filter(x => x.percent < 0).sort((a,b)=>a.percent-b.percent).slice(0, limit);
+
+    return {
+      todayGainersAbs: gainersAbs,
+      todayGainersPct: gainersPct,
+      todayLosersAbs: losersAbs,
+      todayLosersPct: losersPct,
+    };
+  } catch (error) {
+    console.error('[TodayTopGainersLosersDayChange] Error:', error);
+    throw error;
+  }
+}
+
+export async function getAnalysisDashboard(priceSource = 'stock_master') {
+
+  try {
+    const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
+    
+    const priceTableToFetch = priceTable !== 'stock_master' ? priceTable : null;
+    
+    const fetchPromises = [
+      fetchAllRows(supabase, 'stock_transactions', {
+        select: 'stock_name, quantity, buy_price, sell_date, account_name, account_type, buy_date, equity_type',
+        // Single user: fetch all
+      }),
+      priceTableToFetch 
+        ? fetchAllRows(supabase, priceTableToFetch, { select: 'stock_name, cmp' }).catch(() => ({ data: [], error: null }))
+        : Promise.resolve({ data: [], error: null }),
+      fetchAllRows(supabase, 'stock_master', {
+        select: 'stock_name, cmp',
+      }),
+      fetchAllRows(supabase, 'mf_transactions', {
+        select: 'fund_short_name, account_name, transaction_type, date, units, nav',
+        chunkSize: 2000,
+        // Single user: fetch all
+      }),
+      fetchAllRows(supabase, 'fund_master', {
+        select: 'fund_short_name, cmp, lcp',
+      }),
+      priceSource !== 'stock_master' 
+        ? fetchAllRows(supabase, 'fund_master_backend', {
+            select: 'fund_short_name, nav, last_sync_at',
+            order: { column: 'last_sync_at', ascending: false }
+          }).catch(() => ({ data: [], error: null }))
+        : Promise.resolve({ data: [], error: null }),
+      fetchAllRows(supabase, 'ppf_transactions', {
+        select: 'account_name, amount, transaction_type',
+        // Single user: fetch all
+      }),
+      fetchAllRows(supabase, 'epf_transactions', {
+        select: 'employee_share, employer_share, pension_share',
+      }),
+      fetchAllRows(supabase, 'nps_transactions', {
+        select: 'account_name, units, nav, transaction_type',
+        // Single user: fetch all
+      }),
+    ];
+
+    const [
+      { data: stockTxns },
+      { data: priceData },
+      { data: stockMaster },
+      { data: mfTxns },
+      { data: fundMaster },
+      { data: fundMasterBackend },
+      { data: ppfTxns },
+      { data: epfTxns },
+      { data: npsTxns },
+    ] = await Promise.all(fetchPromises);
+
+    // Build CMP map with fallback logic for stocks
+    const cmpMap = new Map();
+    (priceData || []).forEach((m) => {
+      if (m.stock_name) {
+        cmpMap.set(String(m.stock_name).trim().toUpperCase(), toNumber(m.cmp));
+      }
+    });
+    // For angel one (stock_mapping), fallback to stock_master if CMP is missing
+    if (priceTable === 'stock_mapping') {
+      (stockMaster || []).forEach((m) => {
+        const normalizedName = String(m.stock_name || '').trim().toUpperCase();
+        if (!cmpMap.get(normalizedName) || cmpMap.get(normalizedName) === 0) {
+          cmpMap.set(normalizedName, toNumber(m.cmp));
+        }
+      });
+    } else {
+      // If we're using stock_master directly, use it for CMP
+      (stockMaster || []).forEach((m) => {
+        const normalizedName = String(m.stock_name || '').trim().toUpperCase();
+        if (!cmpMap.get(normalizedName)) {
+          cmpMap.set(normalizedName, toNumber(m.cmp));
+        }
+      });
+    }
+
+    // Build Fund CMP map with fallback logic
+    const fundCmpMap = new Map();
+    const fundLcpMap = new Map();
+    
+    // 1. Baseline from fund_master
+    (fundMaster || []).forEach((f) => {
+      const name = String(f.fund_short_name || '').trim().toUpperCase();
+      if (name) {
+        fundCmpMap.set(name, toNumber(f.cmp));
+        fundLcpMap.set(name, toNumber(f.lcp || f.cmp));
+      }
+    });
+
+    // 2. Override from fund_master_backend if applicable
+    if (priceSource !== 'stock_master' && fundMasterBackend) {
+      const groupedBackend = new Map();
+      fundMasterBackend.forEach(m => {
+        const name = String(m.fund_short_name || '').trim().toUpperCase();
+        if (name) {
+          if (!groupedBackend.has(name)) groupedBackend.set(name, []);
+          groupedBackend.get(name).push(m);
+        }
+      });
+
+      groupedBackend.forEach((history, name) => {
+        if (history.length > 0) {
+          const latestNav = toNumber(history[0].nav);
+          const previousNav = history.length > 1 ? toNumber(history[1].nav) : latestNav;
+          fundCmpMap.set(name, latestNav);
+          fundLcpMap.set(name, previousNav);
+        }
+      });
+    }
+
+    // Account-wise aggregation
+    const accountTotals = new Map();
+
+    const addToAccount = (accountName, invested, marketValue, assetType = '') => {
+      const normalizedName = (accountName || '').trim();
+      if (normalizedName.toUpperCase() === 'BDM') {
+        return;
+      }
+
+      const key = normalizedName || 'Other Accounts';
+      if (!accountTotals.has(key)) {
+        accountTotals.set(key, { invested: 0, marketValue: 0, breakdown: {} });
+      }
+
+      const account = accountTotals.get(key);
+      account.invested += invested;
+      account.marketValue += marketValue;
+
+      const typeKey = assetType ? assetType.trim() : 'Uncategorized';
+      if (!account.breakdown[typeKey]) {
+        account.breakdown[typeKey] = { invested: 0, marketValue: 0 };
+      }
+      account.breakdown[typeKey].invested += invested;
+      account.breakdown[typeKey].marketValue += marketValue;
+    };
+
+    // Stocks
+    const stockAccountMap = new Map();
+    (stockTxns || []).forEach((txn) => {
+      const accountName = txn.account_name?.trim();
+      if (!stockAccountMap.has(accountName)) {
+        stockAccountMap.set(accountName, []);
+      }
+      stockAccountMap.get(accountName).push(txn);
+    });
+
+    stockAccountMap.forEach((txns, accountName) => {
+      const etfs = txns.filter((t) => {
+        if (t.sell_date) return false;
+        const isETF = (t.equity_type || '').toLowerCase() === 'etf' || 
+                      String(t.account_type || '').toUpperCase() === 'ETF' ||
+                      ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => String(t.stock_name || '').toUpperCase().includes(p));
+        return isETF;
+      });
+      const stocks = txns.filter((t) => {
+        if (t.sell_date) return false;
+        const isETF = (t.equity_type || '').toLowerCase() === 'etf' || 
+                      String(t.account_type || '').toUpperCase() === 'ETF' ||
+                      ['ETF', 'BEES', 'NIFTYBEES', 'JUNIORBEES', 'BANKBEES', 'GOLDBEES'].some(p => String(t.stock_name || '').toUpperCase().includes(p));
+        return !isETF;
+      });
+
+      const sumTotals = (list) => {
+        return list.reduce(
+          (acc, txn) => {
+            const quantity = toNumber(txn.quantity);
+            const invested = quantity * toNumber(txn.buy_price);
+            const normalizedName = String(txn.stock_name || '').trim().toUpperCase();
+            const cmp = cmpMap.get(normalizedName) || 0;
+            return {
+              invested: acc.invested + invested,
+              marketValue: acc.marketValue + quantity * cmp,
+            };
+          },
+          { invested: 0, marketValue: 0 }
+        );
+      };
+
+      const stockTotals = sumTotals(stocks);
+      if (stockTotals.invested > 0 || stockTotals.marketValue > 0) {
+        addToAccount(accountName, stockTotals.invested, stockTotals.marketValue, 'Equity');
+      }
+
+      const etfTotals = sumTotals(etfs);
+      if (etfTotals.invested > 0 || etfTotals.marketValue > 0) {
+        addToAccount(accountName, etfTotals.invested, etfTotals.marketValue, 'ETF');
+      }
+    });
+
+    // MF
+    const mfAccountMap = new Map();
+    (mfTxns || []).forEach((txn) => {
+      const accountName = txn.account_name?.trim();
+      if (!mfAccountMap.has(accountName)) {
+        mfAccountMap.set(accountName, []);
+      }
+      mfAccountMap.get(accountName).push(txn);
+    });
+
+    mfAccountMap.forEach((txns, accountName) => {
+      let invested = 0;
+      let marketValue = 0;
+
+      const processMFLots = (list) => {
+        const lots = new Map();
+        list.forEach((txn) => {
+          const key = txn.fund_short_name;
+          if (!lots.has(key)) {
+            lots.set(key, []);
+          }
+          lots.get(key).push(txn);
+        });
+
+        lots.forEach((entries) => {
+          const fifo = [];
+          entries
+            .slice()
+            .sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0))
+            .forEach((txn) => {
+              const units = toNumber(txn.units);
+              const nav = toNumber(txn.nav);
+              const type = String(txn.transaction_type || '').toLowerCase();
+              if (type.includes('buy') || type.includes('sip')) {
+                fifo.push({ units, nav });
+              } else if (type.includes('sell') || type.includes('redeem')) {
+                let remaining = Math.abs(units);
+                while (remaining > 0 && fifo.length) {
+                  const lot = fifo[0];
+                  const consumed = Math.min(remaining, lot.units);
+                  lot.units -= consumed;
+                  remaining -= consumed;
+                  if (lot.units <= 1e-6) fifo.shift();
+                }
+              }
+            });
+
+          fifo.forEach((lot) => {
+            const fundName = String(entries[0]?.fund_short_name || '').trim().toUpperCase();
+            const cmp = fundCmpMap.get(fundName) || 0;
+            invested += lot.units * lot.nav;
+            marketValue += lot.units * cmp;
+          });
+        });
+      };
+
+      processMFLots(txns);
+      addToAccount(accountName, invested, marketValue, 'Mutual Fund');
+    });
+
+    // PPF
+    const ppfAccountMap = new Map();
+    (ppfTxns || []).forEach((txn) => {
+      const accountName = txn.account_name?.trim();
+      if (!ppfAccountMap.has(accountName)) {
+        ppfAccountMap.set(accountName, []);
+      }
+      ppfAccountMap.get(accountName).push(txn);
+    });
+
+    ppfAccountMap.forEach((txns, accountName) => {
+      let invested = 0;
+      txns.forEach((txn) => {
+        const amount = toNumber(txn.amount);
+        const type = String(txn.transaction_type || '').toLowerCase();
+        if (type.includes('deposit')) {
+          invested += amount;
+        }
+      });
+      // For PPF, market value is invested + interest, but simplify to invested for now
+      addToAccount(accountName, invested, invested, 'PPF');
+    });
+
+    // EPF (no account_name, so Other Accounts)
+    let epfInvested = 0;
+    (epfTxns || []).forEach((txn) => {
+      epfInvested += toNumber(txn.employee_share) + toNumber(txn.employer_share) + toNumber(txn.pension_share);
+    });
+    addToAccount(null, epfInvested, epfInvested, 'EPF');
+
+    // NPS
+    const npsAccountMap = new Map();
+    (npsTxns || []).forEach((txn) => {
+      const accountName = txn.account_name?.trim();
+      if (!npsAccountMap.has(accountName)) {
+        npsAccountMap.set(accountName, []);
+      }
+      npsAccountMap.get(accountName).push(txn);
+    });
+
+    npsAccountMap.forEach((txns, accountName) => {
+      let invested = 0;
+      let marketValue = 0;
+      txns.forEach((txn) => {
+        const units = toNumber(txn.units);
+        const nav = toNumber(txn.nav);
+        const type = String(txn.transaction_type || '').toLowerCase();
+        if (type.includes('buy')) {
+          invested += units * nav;
+          marketValue += units * nav; // simplify, use nav as cmp
+        }
+      });
+      addToAccount(accountName, invested, marketValue, 'NPS');
+    });
+
+    const totalOtherAccounts = accountTotals.get('Other Accounts');
+    if (totalOtherAccounts) {
+      accountTotals.delete('Other Accounts');
+    }
+
+    const accountWise = [];
+    accountTotals.forEach((totals, accountName) => {
+      if (totals.invested > 0 || totals.marketValue > 0) {
+        accountWise.push({
+          account_name: accountName,
+          total_invested: totals.invested,
+          total_market_value: totals.marketValue,
+          breakdown: totals.breakdown,
+          profit: totals.marketValue - totals.invested,
+          profitPercent: totals.invested > 0 ? ((totals.marketValue - totals.invested) / totals.invested) * 100 : 0,
+        });
+      }
+    });
+
+    const otherAccounts = totalOtherAccounts
+      ? {
+          total_invested: totalOtherAccounts.invested,
+          total_market_value: totalOtherAccounts.marketValue,
+          breakdown: totalOtherAccounts.breakdown,
+        }
+      : { total_invested: 0, total_market_value: 0, breakdown: {} };
+
+    // Top stocks and ETFs
+    const stockData = new Map();
+    const etfData = new Map();
+    (stockTxns || []).forEach((txn) => {
+      const stockName = txn.stock_name;
+      const isETF = (txn.equity_type || "").toLowerCase() === "etf" || 
+                    String(txn.account_type || "").toUpperCase() === "ETF" ||
+                    ["ETF", "BEES", "NIFTYBEES", "JUNIORBEES", "BANKBEES", "GOLDBEES"].some(p => String(txn.stock_name || "").toUpperCase().includes(p));
+      
+      if (isETF) {
+        if (!etfData.has(stockName)) {
+          etfData.set(stockName, []);
+        }
+        etfData.get(stockName).push(txn);
+      } else {
+        if (!stockData.has(stockName)) {
+          stockData.set(stockName, []);
+        }
+        stockData.get(stockName).push(txn);
+      }
+    });
+
+    const processPositions = (dataMap) => {
+      const positions = [];
+      dataMap.forEach((txns, stockName) => {
+        const openTxns = txns.filter((txn) => !txn.sell_date);
+        if (openTxns.length === 0) return;
+
+        let invested = 0;
+        let marketValue = 0;
+        const normalizedName = String(stockName || "").trim().toUpperCase();
+        const cmp = cmpMap.get(normalizedName) || 0;
+        
+        const cashflows = [];
+        let hasFree = false;
+
+        openTxns.forEach((txn) => {
+          const quantity = toNumber(txn.quantity);
+          const price = toNumber(txn.buy_price);
+          invested += quantity * price;
+          marketValue += quantity * cmp;
+          
+          cashflows.push({
+            date: txn.buy_date,
+            amount: -1 * quantity * price
+          });
+
+          if (
+            String(txn.account_type || "").toUpperCase().includes("FREE") || 
+            String(txn.account_name || "").toUpperCase().includes("FREE")
+          ) {
+            hasFree = true;
+          }
+        });
+
+        if (marketValue > 0) {
+          cashflows.push({
+            date: new Date().toISOString(),
+            amount: marketValue
+          });
+        }
+
+        const profit = marketValue - invested;
+        const percent = invested > 0 ? (profit / invested) * 100 : 0;
+        
+        positions.push({
+          name: stockName,
+          invested,
+          marketValue,
+          profit,
+          percent,
+          absReturn: profit,
+          absReturnPct: percent,
+          xirr: calculateXirr(cashflows),
+          transactionCount: openTxns.length,
+          accountType: hasFree ? "FREE" : "REGULAR"
+        });
+      });
+      return positions;
+    };
+
+    const stocks = processPositions(stockData);
+    const etfs = processPositions(etfData);
+
+    const gainers = stocks
+      .filter((s) => s.profit > 0)
+      .sort((a, b) => b.profit - a.profit)
+      .slice(0, 5);
+    const losers = stocks
+      .filter((s) => s.profit < 0)
+      .sort((a, b) => a.profit - b.profit)
+      .slice(0, 5);
+
+    // For gainersPct/losersPct in frontend
+    const gainersPct = [...stocks]
+      .filter((s) => s.percent > 0)
+      .sort((a, b) => b.percent - a.percent)
+      .slice(0, 5);
+    const losersPct = [...stocks]
+      .filter((s) => s.percent < 0)
+      .sort((a, b) => a.percent - b.percent)
+      .slice(0, 5);
+
+    return {
+      accountWise,
+      otherAccounts,
+      topGainers: gainers,
+      topLosers: losers,
+      topGainersPct: gainersPct,
+      topLosersPct: losersPct,
+      totalStocks: stocks.length,
+      openEquityPositions: {
+        stocks: stocks,
+        etfs: etfs,
+      },
+    };
+  } catch (error) {
+    console.error('Analysis Dashboard error:', error);
+    throw error;
+  }
+}
+
+export async function getAnalysisSummary(priceSource = 'stock_master') {
+  try {
+    const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
+    
+    const fetchPromises = [
+      fetchAllRows(supabase, 'stock_transactions', {
+        select: 'stock_name, quantity, buy_price, buy_date, sell_date, sell_price, account_name, account_type, equity_type',
+        // Single user: fetch all
+      }),
+      fetchAllRows(supabase, 'stock_master', {
+        select: 'stock_name, sector, category, industry, macro_sector, known_sector, basic_industry, cmp, lcp',
+      }),
+      fetchAllRows(supabase, priceTable !== 'stock_master' ? priceTable : null, {
+        select: 'stock_name, cmp, lcp',
+      }).catch(() => ({ data: [], error: null })),
+      fetchAllRows(supabase, 'mf_transactions', {
+        select: 'fund_short_name, account_name, transaction_type, date, units, nav',
+        chunkSize: 2000,
+        // Single user: fetch all
+      }),
+      fetchAllRows(supabase, 'fund_master', {
+        select: 'fund_short_name, cmp, lcp, category, amc_name',
+      }),
+    ];
+
+    const [
+      { data: stockTxns, error: stockError },
+      { data: stockMaster, error: stockMasterError },
+      { data: priceData, error: priceError },
+      { data: mfTxns, error: mfError },
+      { data: fundMaster, error: fundMasterError },
+    ] = await Promise.all(fetchPromises);
+
+    if (stockError) {
+      console.error('[AnalysisSummary] stock_transactions fetch error:', stockError);
+    }
+    if (stockMasterError) {
+      console.error('[AnalysisSummary] stock_master fetch error:', stockMasterError);
+    }
+    if (priceError) {
+      console.error('[AnalysisSummary] price data fetch error:', priceError);
+    }
+    if (mfError) {
+      console.error('[AnalysisSummary] mf_transactions fetch error:', mfError);
+    }
+    if (fundMasterError) {
+      console.error('[AnalysisSummary] fund_master fetch error:', fundMasterError);
+    }
+
+    const stockMasterMap = new Map((stockMaster || []).map((row) => [String(row.stock_name || '').trim(), row]));
+    
+    // Build price maps with fallback logic
+    const cmpMap = new Map();
+    const lcpMap = new Map();
+    
+    // First, add price data from the selected price table (stock_mapping or stock_master CMP/LCP columns)
+    (priceData || []).forEach((m) => {
+      const stockName = String(m.stock_name || '').trim().toUpperCase();
+      const cmp = toNumber(m.cmp);
+      const lcp = toNumber(m.lcp);
+      cmpMap.set(stockName, cmp);
+      lcpMap.set(stockName, lcp);
+    });
+    
+    // For angel one (stock_mapping), add fallback from stock_master if CMP/LCP is missing
+    if (priceTable === 'stock_mapping') {
+      stockMasterMap.forEach((row, stockName) => {
+        const normalizedName = String(stockName || '').trim().toUpperCase();
+        if (!cmpMap.get(normalizedName) || cmpMap.get(normalizedName) === 0) {
+          const cmp = toNumber(row.cmp);
+          if (cmp > 0) cmpMap.set(normalizedName, cmp);
+        }
+        if (!lcpMap.get(normalizedName) || lcpMap.get(normalizedName) === 0) {
+          const lcp = toNumber(row.lcp);
+          if (lcp > 0) lcpMap.set(normalizedName, lcp);
+        }
+      });
+    } else {
+      // If we're using stock_master directly, populate from stockMasterMap
+      stockMasterMap.forEach((row, stockName) => {
+        const normalizedName = String(stockName || '').trim().toUpperCase();
+        if (!cmpMap.has(normalizedName)) {
+          cmpMap.set(normalizedName, toNumber(row.cmp));
+        }
+        if (!lcpMap.has(normalizedName)) {
+          lcpMap.set(normalizedName, toNumber(row.lcp));
+        }
+      });
+    }
+    
+    const fundPriceMap = new Map((fundMaster || []).map((m) => [m.fund_short_name, { cmp: toNumber(m.cmp), lcp: toNumber(m.lcp) }]));
+    const fundMasterMap = new Map((fundMaster || []).map((row) => [String(row.fund_short_name || '').trim(), row]));
+
+    if (!stockTxns?.length) {
+      console.warn('[AnalysisSummary] No stock_transactions returned. First few rows:', stockTxns?.slice?.(0, 3));
+    }
+    if (!stockMaster?.length) {
+      console.warn('[AnalysisSummary] No stock_master rows returned.');
+    }
+    if (!priceData?.length) {
+      console.warn('[AnalysisSummary] No price data returned from:', priceTable);
+    }
+    if (!mfTxns?.length) {
+      console.warn('[AnalysisSummary] No mf_transactions returned. First few rows:', mfTxns?.slice?.(0, 3));
+    }
+    if (!fundMaster?.length) {
+      console.warn('[AnalysisSummary] No fund_master rows returned.');
+    }
+
+    // Process Equity Transactions (no FIFO: use raw open lots)
+    const equityActive = [];
+    const openStockTxns = (stockTxns || []).filter((txn) => !txn.sell_date);
+
+    openStockTxns.forEach((txn) => {
+      const stockName = String(txn.stock_name || '').trim();
+      if (!stockName) {
+        console.warn('[AnalysisSummary] Encountered stock transaction without stock_name:', txn);
+        return;
+      }
+
+      const quantity = toNumber(txn.quantity);
+      const price = toNumber(txn.buy_price);
+      const accountName = txn.account_name || 'Unknown';
+      const accountType = txn.account_type || 'STOCK';
+      const masterInfo = stockMasterMap.get(stockName) || {};
+      
+      const normalizedStockNameForMap = stockName.toUpperCase();
+      const cmp = cmpMap.get(normalizedStockNameForMap) || 0;
+      const lcp = lcpMap.get(normalizedStockNameForMap) || 0;
+      const investedAmount = quantity * price;
+      const marketValue = quantity * cmp;
+      const unrealizedGain = marketValue - investedAmount;
+      const unrealizedGainPercent = investedAmount > 0 ? (unrealizedGain / investedAmount) * 100 : 0;
+      const dayChange = quantity * (cmp - lcp);
+
+      const flows = [];
+      if (investedAmount > 0) {
+        flows.push({ amount: -investedAmount, date: txn.buy_date });
+      }
+      if (marketValue > 0) {
+        flows.push({ amount: marketValue, date: new Date().toISOString() });
+      }
+
+      const equityType = txn.equity_type ? String(txn.equity_type).trim().toUpperCase() : 'STOCK';
+
+      equityActive.push({
+        stock_name: stockName,
+        account_name: accountName,
+        account_type: accountType,
+        equity_type: equityType,
+        sector: masterInfo.sector || 'Unknown',
+        category: masterInfo.category || 'Unknown',
+        industry: masterInfo.industry || 'Unknown',
+        macro_sector: masterInfo.macro_sector || 'Unknown',
+        known_sector: masterInfo.known_sector || 'Unknown',
+        basic_industry: masterInfo.basic_industry || 'Unknown',
+        invested_amount: investedAmount,
+        market_value: marketValue,
+        unrealized_gain: unrealizedGain,
+        unrealized_gain_percent: unrealizedGainPercent,
+        day_change: dayChange,
+        units: quantity,
+        cmp,
+        master_cmp: cmp,
+        master_lcp: lcp,
+        buy_date: txn.buy_date,
+        buy_price: price,
+        cashflows: flows,
+        xirr: calculateXirr(flows),
+      });
+    });
+
+    const equityClosed = [];
+    const closedStockTxns = (stockTxns || []).filter((txn) => txn.sell_date);
+
+    closedStockTxns.forEach((txn) => {
+      const stockName = String(txn.stock_name || '').trim();
+      if (!stockName) {
+        return;
+      }
+
+      const quantity = toNumber(txn.quantity ?? txn.units);
+      const units = Math.abs(quantity);
+      const buyPrice = toNumber(txn.buy_price);
+      const sellPrice = toNumber(txn.sell_price);
+      const investedAmount = units * buyPrice;
+      const saleAmount = units * sellPrice;
+      const chargesAllocated = 0; // No charges field in database
+      const netSaleValue = saleAmount - chargesAllocated;
+      const gain = netSaleValue - investedAmount;
+      const gainPercent = investedAmount > 0 ? (gain / investedAmount) * 100 : 0;
+      const accountName = txn.account_name || 'Unknown';
+      const accountType = txn.account_type || 'STOCK';
+      const masterInfo = stockMasterMap.get(stockName) || {};
+      const buyDate = normalizeDate(txn.buy_date);
+      const sellDate = normalizeDate(txn.sell_date);
+
+      const flows = [];
+      if (investedAmount !== 0 && buyDate) {
+        flows.push({ amount: -investedAmount, date: buyDate });
+      }
+      if (netSaleValue !== 0 && sellDate) {
+        flows.push({ amount: netSaleValue, date: sellDate });
+      }
+
+      const equityType = txn.equity_type ? String(txn.equity_type).trim().toUpperCase() : 'STOCK';
+
+      equityClosed.push({
+        stock_name: stockName,
+        account_name: accountName,
+        account_type: accountType,
+        equity_type: equityType,
+        sector: masterInfo.sector || 'Unknown',
+        category: masterInfo.category || 'Unknown',
+        industry: masterInfo.industry || 'Unknown',
+        macro_sector: masterInfo.macro_sector || 'Unknown',
+        known_sector: masterInfo.known_sector || 'Unknown',
+        basic_industry: masterInfo.basic_industry || 'Unknown',
+        invested_amount: investedAmount,
+        sale_amount: saleAmount,
+        charges_allocated: chargesAllocated,
+        net_sale_value: netSaleValue,
+        gain,
+        gain_percent: gainPercent,
+        units,
+        buy_date: buyDate,
+        sell_date: sellDate,
+        buy_price: buyPrice,
+        sell_price: sellPrice,
+        cashflows: flows,
+        xirr: calculateXirr(flows),
+      });
+    });
+
+
+   // Process Mutual Fund Transactions (FIFO logic for active vs closed lots)
+const mfActive = []; // open lots per fund
+const mfClosed = []; // closed lots per fund
+
+const groupByFund = new Map();
+(mfTxns || []).forEach((txn) => {
+  const fundName = String(txn.fund_short_name || '').trim();
+  if (!fundName) {
+    return;
+  }
+  if (!groupByFund.has(fundName)) {
+    groupByFund.set(fundName, []);
+  }
+  groupByFund.get(fundName).push(txn);
+});
+
+groupByFund.forEach((txns, fundName) => {
+  const lotsByAccount = new Map();
+  txns.forEach((txn) => {
+    const accountName = String(txn.account_name || '').trim();
+    if (!lotsByAccount.has(accountName)) {
+      lotsByAccount.set(accountName, []);
+    }
+    lotsByAccount.get(accountName).push(txn);
+  });
+
+  const openLots = [];
+  const closedLots = [];
+  const fundInfo = fundMasterMap.get(fundName) || {};
+  const { cmp = 0, lcp = 0, category = 'Unknown', amc_name: amcName = 'Unknown' } = fundInfo;
+
+  lotsByAccount.forEach((accountTxns, accountName) => {
+    const sorted = accountTxns
+      .slice()
+      .map((txn, index) => {
+        const fundNameFormatted = String(txn.fund_short_name || '').trim();
+        const accountNameFormatted = String(txn.account_name || '').trim();
+        const type = String(txn.transaction_type || '').toLowerCase();
+        const units = toNumber(txn.units);
+        const nav = toNumber(txn.nav);
+        const effectiveDate =
+          parseMfTransactionDate(txn.date) || parseMfTransactionDate(txn.txn_date) || parseMfTransactionDate(txn.created_at) || null;
+
+        return {
+          ...txn,
+          fundName: fundNameFormatted,
+          accountName: accountNameFormatted,
+          type,
+          units,
+          nav,
+          effectiveDate,
+          __sequence: index,
+          __effectiveDate: effectiveDate,
+        };
+      })
+      .filter((txn) => txn && Number.isFinite(txn.units) && Math.abs(txn.units) > 1e-8)
+      .sort((a, b) => {
+        const aDate = a.__effectiveDate ? a.__effectiveDate.getTime() : Number.POSITIVE_INFINITY;
+        const bDate = b.__effectiveDate ? b.__effectiveDate.getTime() : Number.POSITIVE_INFINITY;
+        if (aDate !== bDate) return aDate - bDate;
+        return a.__sequence - b.__sequence;
+      });
+
+    sorted.forEach((txn) => {
+      const { units, nav, type, effectiveDate } = txn;
+
+      if (!Number.isFinite(units) || !Number.isFinite(nav) || Math.abs(units) <= 1e-8 || nav <= 0) {
+        return;
+      }
+
+      if (type === 'buy' && units > 0) {
+        openLots.push({
+          units,
+          cost: units * nav,
+          nav,
+          date: effectiveDate,
+          order: effectiveDate ? effectiveDate.getTime() : Number.POSITIVE_INFINITY,
+          sequence: txn.__sequence,
+        });
+        return;
+      }
+
+      if (type === 'sell') {
+        const unitsToConsume = Math.abs(units);
+        if (unitsToConsume <= 1e-8) {
+          return;
+        }
+
+        const { consumed, remaining } = consumeLots(openLots, unitsToConsume);
+
+        if (!consumed.length) {
+          return;
+        }
+
+        if (remaining > 1e-6) {
+          console.warn('[AnalysisSummary] MF sale consumed more units than available', {
+            fundName,
+            accountName,
+            remaining,
+            transaction: txn,
+          });
+        }
+
+        let totalInvested = 0;
+        const saleCashflows = [];
+
+        consumed.forEach((portion) => {
+          const { cost, buyDate } = portion;
+          totalInvested += cost;
+
+          if (cost > 0 && buyDate) {
+            saleCashflows.push({ amount: -cost, date: buyDate });
+          }
+        });
+
+        const totalUnitsSold = consumed.reduce((sum, portion) => sum + portion.units, 0);
+        const saleAmount = nav * totalUnitsSold;
+        if (saleAmount > 0) {
+          const saleDate = effectiveDate ? effectiveDate.toISOString() : normalizeDate(txn.date) || new Date().toISOString();
+          saleCashflows.push({ amount: saleAmount, date: saleDate });
+          const gain = saleAmount - totalInvested;
+          const gainPercent = totalInvested > 0 ? (gain / totalInvested) * 100 : 0;
+
+          closedLots.push({
+            invested_amount: totalInvested,
+            sale_amount: saleAmount,
+            gain,
+            gain_percent: gainPercent,
+            units: totalUnitsSold,
+            cashflows: saleCashflows,
+          });
+        }
+      }
+    });
+  });
+
+  // Aggregate open lots for active (only if no closed lots)
+  const openLotsFiltered = openLots.filter((lot) => lot.units > 1e-8);
+  if (openLotsFiltered.length && closedLots.length === 0) {
+    const valuationPrice = cmp > 0 ? cmp : lcp > 0 ? lcp : 0;
+    const totalUnits = openLotsFiltered.reduce((sum, lot) => sum + lot.units, 0);
+    const totalCost = openLotsFiltered.reduce((sum, lot) => sum + Math.max(lot.cost, 0), 0);
+
+    if (totalUnits >= 1) {
+      const marketValue = totalUnits * valuationPrice;
+      const gain = marketValue - totalCost;
+      const gainPercent = totalCost > 1e-8 ? (gain / totalCost) * 100 : 0;
+
+      mfActive.push({
+        fund_short_name: fundName,
+        category,
+        amc_name: amcName,
+        units: totalUnits,
+        invested: totalCost,
+        marketValue,
+        cmp: valuationPrice,
+        avgBuy: totalUnits > 0 ? totalCost / totalUnits : 0,
+        urp: gain,
+        urpPct: gainPercent,
+      });
+    }
+  }
+
+  // Aggregate closed lots for closed
+  if (closedLots.length) {
+    const totalInvested = closedLots.reduce((sum, lot) => sum + lot.invested_amount, 0);
+    const totalClosedValue = closedLots.reduce((sum, lot) => sum + lot.sale_amount, 0);
+    const totalGain = closedLots.reduce((sum, lot) => sum + lot.gain, 0);
+    const totalUnits = closedLots.reduce((sum, lot) => sum + lot.units, 0);
+
+    mfClosed.push({
+      fund_short_name: fundName,
+      category,
+      amc_name: amcName,
+      invested: totalInvested,
+      closedValue: totalClosedValue,
+      urp: totalGain,
+      urpPct: totalInvested > 0 ? (totalGain / totalInvested) * 100 : 0,
+      units: totalUnits,
+    });
+  }
+});
+
+    return {
+      equityActive,
+      equityClosed,
+      mfActive,
+      mfClosed,
+    };
+  } catch (error) {
+    console.error('Analysis Summary error:', error);
+    throw error;
+  }
+}
+
+export async function getTopMutualFunds(sortBy = 'absReturnPct', sortDirection = 'desc') {
+  try {
+    const [{ data: transactions, error: txnError }, { data: masters, error: masterError }] = await Promise.all([
+      fetchAllRows(supabase, 'mf_transactions', {
+        select: 'fund_short_name, account_name, transaction_type, date, units, nav',
+        chunkSize: 1000,
+      }),
+      fetchAllRows(supabase, 'fund_master', {
+        select: 'fund_short_name, cmp, lcp',
+      }),
+    ]);
+
+    if (txnError) throw new Error(txnError.message || 'Failed to load MF transactions');
+    if (masterError) throw new Error(masterError.message || 'Failed to load fund master');
+
+    const cmpMap = new Map(
+      (masters || []).map((row) => [String(row.fund_short_name).trim(), { cmp: toNumber(row.cmp), lcp: toNumber(row.lcp) }]),
+    );
+    const fundData = new Map();
+
+    (transactions || []).forEach((txn) => {
+      const fundName = String(txn.fund_short_name || '').trim();
+      if (!fundName) return;
+      if (!fundData.has(fundName)) {
+        fundData.set(fundName, []);
+      }
+      fundData.get(fundName).push(txn);
+    });
+
+    const funds = [];
+
+    fundData.forEach((txns, fundName) => {
+      const fifo = [];
+      const cashflows = [];
+      const transactionTypes = new Set();
+
+
+
+      txns
+        .slice()
+        .sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0))
+        .forEach((txn) => {
+          const rawType = String(txn.transaction_type || '').trim();
+          const unitsRaw = toNumber(txn.units);
+          const normalizedType = normalizeMfTransactionType(rawType, unitsRaw);
+          const type = (normalizedType || rawType || '').toLowerCase();
+          transactionTypes.add(type);
+
+          const units = Math.abs(unitsRaw);
+          const nav = toNumber(txn.nav);
+          const date = txn.date || new Date().toISOString();
+
+          if (!units || !Number.isFinite(nav)) {
+            return;
+          }
+
+          if (type === 'buy' || (type === '' && unitsRaw > 0)) {
+            fifo.push({ units, nav, date });
+            cashflows.push({ amount: -units * nav, date });
+          } else if (type === 'sell' || (type === '' && unitsRaw < 0)) {
+            let remaining = units;
+            let realized = 0;
+
+            while (remaining > 0 && fifo.length) {
+              const lot = fifo[0];
+              const consumed = Math.min(remaining, lot.units);
+              realized += consumed * nav;
+              lot.units -= consumed;
+              remaining -= consumed;
+              if (lot.units <= 1e-8) fifo.shift();
+            }
+
+            if (realized > 0) {
+              cashflows.push({ amount: realized, date });
+            }
+          } else if (type === 'charges') {
+            const amount = units * nav;
+            if (amount > 0) {
+              cashflows.push({ amount: -amount, date });
+            }
+          }
+        });
+
+      let invested = 0;
+      let marketValue = 0;
+      let totalUnits = 0;
+      const cmpInfo = cmpMap.get(fundName) || { cmp: 0, lcp: 0 };
+      const priceToUse = cmpInfo.cmp > 0 ? cmpInfo.cmp : cmpInfo.lcp;
+
+      fifo.forEach((lot) => {
+        invested += lot.units * lot.nav;
+        const navToUse = priceToUse > 0 ? priceToUse : lot.nav;
+        marketValue += lot.units * navToUse;
+        totalUnits += lot.units;
+      });
+
+      if (totalUnits > 0) {
+        if (marketValue > 0) {
+          cashflows.push({ amount: marketValue, date: new Date().toISOString() });
+        }
+
+        const absReturn = marketValue - invested;
+        const absReturnPct = invested > 0 ? (absReturn / invested) * 100 : 0;
+        const xirr = calculateXirr(cashflows);
+
+        funds.push({
+          name: fundName,
+          invested,
+          marketValue,
+          absReturn,
+          absReturnPct,
+          xirr,
+          totalUnits,
+        });
+      }
+    });
+
+    // Sort by specified criteria and take top 5
+    const toComparableValue = (fund) => {
+      const value = fund[sortBy];
+      return typeof value === 'number' && isFinite(value) ? value : 0;
+    };
+    funds.sort((a, b) => {
+      const aVal = toComparableValue(a);
+      const bVal = toComparableValue(b);
+      return sortDirection === 'desc' ? bVal - aVal : aVal - bVal;
+    });
+    const topFunds = funds.slice(0, 5);
+
+
+
+    return topFunds;
+  } catch (error) {
+    console.error('Top Mutual Funds error:', error);
+    throw error;
+  }
+}
+
+const normalizeAccountTypeForFreeStocks = (accountType, accountName) => {
+  const normalizedType = (accountType ?? '').toString().trim().toUpperCase();
+  const normalizedName = (accountName ?? '').toString().trim().toUpperCase();
+
+  if (normalizedType.includes('FREE') || normalizedName.includes('FREE')) {
+    return 'FREE';
+  }
+
+  if (normalizedType.includes('REGULAR')) {
+    return 'REGULAR';
+  }
+
+  return normalizedType || 'REGULAR';
+};
+
+export async function getEarningData() {
+  try {
+    const fetchPromises = [
+      fetchAllRows(supabase, 'stock_transactions', {
+        select: 'stock_name, quantity, buy_price, sell_price, sell_date, account_name, account_type',
+        // Single user: fetch all
+      }),
+      fetchAllRows(supabase, 'account_cashflows', {
+        select: 'stock_name, amount, transaction_type, date, account_name',
+        filters: [
+          (q) => q.eq('transaction_type', 'dividend'),
+          // Single user: fetch all
+        ]
+      })
+    ];
+
+    const [{ data: allTxns }, { data: dividendTxns }] = await Promise.all(fetchPromises);
+
+    // Grouping key: stock_name + account_type
+    const earningMap = new Map();
+
+    // Process all transactions
+    (allTxns || []).forEach((txn) => {
+      const name = String(txn.stock_name || '').trim();
+      if (!name) return;
+
+      const accName = (txn.account_name || '').trim();
+      const accType = normalizeAccountTypeForFreeStocks(txn.account_type, accName);
+      const key = `${name}::${accType}`;
+
+      if (!earningMap.has(key)) {
+        earningMap.set(key, { 
+          stock_name: name, 
+          account_type: accType,
+          profit: 0, 
+          dividend: 0, 
+          current_investment: 0 
+        });
+      }
+
+      const entry = earningMap.get(key);
+      const quantity = toNumber(txn.quantity);
+      const buyPrice = toNumber(txn.buy_price);
+
+      if (txn.sell_date && txn.sell_price !== null) {
+        // Realized profit
+        const sellPrice = toNumber(txn.sell_price);
+        entry.profit += (sellPrice - buyPrice) * quantity;
+      } else if (!txn.sell_date) {
+        // Open investment
+        entry.current_investment += buyPrice * quantity;
+      }
+    });
+
+    // Process dividends
+    (dividendTxns || []).forEach((txn) => {
+      const name = String(txn.stock_name || '').trim();
+      if (!name) return;
+
+      const accName = (txn.account_name || '').trim();
+      const accType = normalizeAccountTypeForFreeStocks(null, accName);
+      const key = `${name}::${accType}`;
+
+      // Only add dividend if the stock exists in the earningMap (from stock_transactions)
+      if (earningMap.has(key)) {
+        earningMap.get(key).dividend += toNumber(txn.amount);
+      } else {
+        // If dividend exists but no stock_transactions for this type (unlikely but possible)
+        // Check if we should add it anyway?
+        // Let's at least check if the stock exists in any other account type
+        const stockExistsInAnyType = Array.from(earningMap.values()).some(e => e.stock_name === name);
+        if (stockExistsInAnyType) {
+          // Find first entry for this stock
+          const entry = Array.from(earningMap.values()).find(e => e.stock_name === name);
+          if (entry) entry.dividend += toNumber(txn.amount);
+        }
+      }
+    });
+
+    return Array.from(earningMap.values()).sort((a, b) => 
+      (b.profit + b.dividend + b.current_investment) - (a.profit + a.dividend + a.current_investment)
+    );
+  } catch (error) {
+    console.error('Earning Data service error:', error);
+    throw error;
+  }
+}
+
+export async function getAnalysisFreeStocks(priceSource = 'stock_master') {
+  try {
+    const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
+    
+    const fetchPromises = [
+      fetchAllRows(supabase, 'stock_transactions', {
+        select: 'id, stock_name, quantity, buy_price, sell_date, account_name, account_type, buy_date, equity_type',
+        // Single user: fetch all
+      }),
+      fetchAllRows(supabase, priceTable !== 'stock_master' ? priceTable : null, {
+        select: 'stock_name, cmp',
+      }).catch(() => ({ data: [], error: null })),
+      fetchAllRows(supabase, 'stock_master', {
+        select: 'stock_name, cmp',
+      }),
+    ];
+    
+    let [{ data: stockTxns }, { data: priceData }, { data: stockMaster }] = await Promise.all(fetchPromises);
+
+    // Build CMP map with fallback logic
+    const cmpMap = new Map();
+    (priceData || []).forEach((m) => {
+      if (m.stock_name) {
+        cmpMap.set(String(m.stock_name).trim().toUpperCase(), toNumber(m.cmp));
+      }
+    });
+    // For angel one (stock_mapping), fallback to stock_master if CMP is missing
+    if (priceTable === 'stock_mapping') {
+      (stockMaster || []).forEach((m) => {
+        const normalizedName = String(m.stock_name || '').trim().toUpperCase();
+        if (!cmpMap.get(normalizedName) || cmpMap.get(normalizedName) === 0) {
+          cmpMap.set(normalizedName, toNumber(m.cmp));
+        }
+      });
+    } else {
+      // If we're using stock_master directly, use it for CMP
+      (stockMaster || []).forEach((m) => {
+        const normalizedName = String(m.stock_name || '').trim().toUpperCase();
+        if (!cmpMap.get(normalizedName)) {
+          cmpMap.set(normalizedName, toNumber(m.cmp));
+        }
+      });
+    }
+    const freeStocks = [];
+    const regularStocks = [];
+
+    // Group by stock name, considering only unsold positions
+    const byStock = new Map();
+    (stockTxns || []).forEach((txn) => {
+      const name = String(txn.stock_name || '').trim();
+      if (!name) return;
+      if (!byStock.has(name)) byStock.set(name, []);
+      byStock.get(name).push(txn);
+    });
+
+    byStock.forEach((txns, stockName) => {
+      const openTxns = txns.filter(txn => !txn.sell_date);
+      if (openTxns.length === 0) return;
+
+      let totalFreeUnits = 0;
+      let totalFreeInvested = 0;
+      let totalFreeMV = 0;
+      let totalRegularUnits = 0;
+      let totalRegularInvested = 0;
+      let totalRegularMV = 0;
+      
+      const normalizedStockName = stockName.toUpperCase();
+      const cmp = cmpMap.get(normalizedStockName) || 0;
+
+      // Prepare XIRR cashflows including current market value
+      const getXirrFlows = (txns) => {
+        const flows = txns.map(txn => ({
+          date: txn.buy_date,
+          amount: -1 * (txn.quantity * txn.buy_price) // Negative for purchases
+        }));
+        
+        // Add current market value as positive cashflow
+        const totalUnits = txns.reduce((sum, txn) => sum + toNumber(txn.quantity), 0);
+        if (totalUnits > 0) {
+          flows.push({
+            date: new Date().toISOString().split('T')[0], // Today's date
+            amount: totalUnits * cmp // Positive for current value
+          });
+        }
+        
+        return calculateXirr(flows);
+      };
+
+      const transactions = openTxns.map((txn, index) => {
+        const quantity = toNumber(txn.quantity);
+        const buyPrice = toNumber(txn.buy_price);
+        const accountName = (txn.account_name || '').trim();
+        const accountType = normalizeAccountTypeForFreeStocks(txn.account_type, accountName);
+
+        // Calculate individual transaction XIRR
+        const xirrValue = getXirrFlows([{
+          ...txn,
+          quantity,
+          buy_price: buyPrice
+        }]);
+
+        return {
+          id: txn.id,
+          stock_name: txn.stock_name,
+          buy_date: txn.buy_date,
+          buy_price: buyPrice,
+          quantity,
+          amount: quantity * buyPrice,
+          account_name: accountName,
+          account_type: accountType,
+          equity_type: txn.equity_type || 'stocks',
+          lotKey: `${accountType}::${txn.stock_name}::${accountName || 'Unknown'}`,
+          xirr: xirrValue // Add XIRR to transaction object
+        };
+      });
+
+      // Calculate totals from transactions and group XIRR
+      const freeTransactions = transactions.filter(t => t.account_type === 'FREE');
+      const regularTransactions = transactions.filter(t => t.account_type !== 'FREE');
+
+      transactions.forEach((txn) => {
+        const invested = txn.quantity * txn.buy_price;
+        const mv = txn.quantity * cmp;
+
+        if (txn.account_type === 'FREE') {
+          totalFreeUnits += txn.quantity;
+          totalFreeInvested += invested;
+          totalFreeMV += mv;
+        } else {
+          totalRegularUnits += txn.quantity;
+          totalRegularInvested += invested;
+          totalRegularMV += mv;
+        }
+      });
+
+      // Add to appropriate list if there are open positions
+      if (totalFreeUnits > 0) {
+        freeStocks.push({
+          stockName,
+          accountName: 'Multiple',
+          invested: totalFreeInvested,
+          marketValue: totalFreeMV,
+          profit: totalFreeMV - totalFreeInvested,
+          profitPercent: totalFreeInvested > 0 ? ((totalFreeMV - totalFreeInvested) / totalFreeInvested) * 100 : 0,
+          quantity: totalFreeUnits,
+          avgPrice: totalFreeUnits > 0 ? totalFreeInvested / totalFreeUnits : 0,
+          accountType: 'FREE',
+          xirr: getXirrFlows(freeTransactions), // Add group XIRR
+          transactions: freeTransactions
+        });
+      }
+
+      if (totalRegularUnits > 0) {
+        regularStocks.push({
+          stockName,
+          accountName: 'Multiple',
+          invested: totalRegularInvested,
+          marketValue: totalRegularMV,
+          profit: totalRegularMV - totalRegularInvested,
+          profitPercent: totalRegularInvested > 0 ? ((totalRegularMV - totalRegularInvested) / totalRegularInvested) * 100 : 0,
+          quantity: totalRegularUnits,
+          avgPrice: totalRegularUnits > 0 ? totalRegularInvested / totalRegularUnits : 0,
+          accountType: 'REGULAR',
+          xirr: getXirrFlows(regularTransactions), // Add group XIRR
+          transactions: regularTransactions
+        });
+      }
+    });
+
+    return { freeStocks, regularStocks };
+  } catch (error) {
+    console.error('Analysis Free Stocks error:', error);
+    throw error;
+  }
+}

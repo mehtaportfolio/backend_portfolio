@@ -1,0 +1,8 @@
+src/
+public/
+build/
+node_modules/
+.git/
+.eslintrc.json
+tailwind.config.js
+postcss.config.js

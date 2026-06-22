@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Puppeteer / browser cache
+.cache/
+.cache/puppeteer/
+puppeteer-cache/
+
+# Environment files
+.env
+.env.*
+.env.backend
+.env.backend.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Build output
+dist/
+build/
+coverage/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Debug folders
+debug-logs/

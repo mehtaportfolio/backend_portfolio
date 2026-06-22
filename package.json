@@ -1,0 +1,49 @@
+{
+  "name": "portfolio-tracker-backend",
+  "version": "1.0.0",
+  "description": "Backend server for portfolio tracker - handles data aggregation and caching",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "debug-chrome": "node debug-chrome.cjs"
+  },
+  "dependencies": {
+    "@sparticuz/chromium": "^132.0.0",
+    "@supabase/supabase-js": "^2.38.4",
+    "axios": "^1.6.0",
+    "axios-cookiejar-support": "^6.0.5",
+    "cheerio": "^1.0.0-rc.12",
+    "cors": "^2.8.5",
+    "csv-parser": "^3.2.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "fido2-lib": "^3.5.9",
+    "googleapis": "^158.0.0",
+    "hi-base32": "^0.5.1",
+    "imapflow": "^1.3.3",
+    "kiteconnect": "^5.2.0",
+    "mailparser": "^3.9.8",
+    "multer": "^2.1.1",
+    "node-cron": "^4.2.1",
+    "otplib": "^12.0.1",
+    "pdfjs-dist": "^5.6.205",
+    "puppeteer-core": "^24.42.0",
+    "react-icons": "^5.6.0",
+    "sharp": "^0.34.5",
+    "smartapi-javascript": "^1.0.27",
+    "tesseract.js": "^7.0.0",
+    "tough-cookie": "^6.0.1",
+    "web-push": "^3.6.7",
+    "ws": "^8.20.0",
+    "yahoo-finance2": "^3.14.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0"
+  }
+}
