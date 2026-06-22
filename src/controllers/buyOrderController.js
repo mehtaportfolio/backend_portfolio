@@ -28,6 +28,72 @@ export async function getStockMaster(req, res) {
   }
 }
 
+export async function getStockMasterFull(req, res) {
+  try {
+    const { data, error } = await fetchAllRows(
+      supabase,
+      'stock_master',
+      {
+        select: '*',
+        order: { column: 'stock_name', ascending: true }
+      }
+    );
+
+    if (error) {
+      return res.status(500).json({
+        error: error.message
+      });
+    }
+
+    res.json({
+      data: data || []
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      error: err.message
+    });
+  }
+}
+
+export async function getSymbolToken(req, res) {
+  try {
+    const { stock_name, exchange } = req.query;
+
+    if (!stock_name || !exchange) {
+      return res.status(400).json({
+        error: 'stock_name and exchange are required'
+      });
+    }
+    console.log('stock_name:', stock_name)
+console.log('exchange:', exchange)
+
+   const { data, error } = await supabase
+  .from('stock_symbols')
+  .select('symbol_token,name,exchange')
+  .eq('name', stock_name)
+  .eq('exchange', exchange.toUpperCase())
+  .limit(1)
+console.log('Matched rows:', data)
+    if (error) {
+      return res.status(500).json({
+        error: error.message
+      });
+    }
+
+    res.json({
+      symbol_token: data?.[0]?.symbol_token || ''
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      error: err.message
+    });
+  }
+}
+
 export async function placeBuyOrder(req, res) {
   try {
     const { account_name, broker, symbol, quantity, order_type, transaction_type, price } = req.body;
