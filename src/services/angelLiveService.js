@@ -13,6 +13,8 @@ let tokenToSymbolMap = {};
 let equityPositionSymbols = new Set();
 let isLoggingIn = false;
 
+const dynamicSubscriptions = new Map();
+
 async function refreshEquityPositionSymbols() {
   try {
     const { data, error } = await fetchAllRows(supabase, 'equity_positions', {
@@ -37,6 +39,16 @@ async function refreshEquityPositionSymbols() {
   }
 }
 
+function normalizeSymbol(symbol) {
+  if (!symbol) return symbol;
+
+  symbol = symbol.trim();
+
+  return symbol.toUpperCase().endsWith('-EQ')
+    ? symbol.slice(0, -3)
+    : symbol;
+}
+
 async function getEquityPositionTokens() {
   try {
     const { data: positions, error: positionError } = await supabase
@@ -48,17 +60,31 @@ async function getEquityPositionTokens() {
       return [];
     }
 
-    const uniquePositions = Array.from(new Map(
-      (positions || [])
-        .filter((row) => row.symbol)
-        .map((row) => [row.symbol.trim(), row])
-    ).values());
+const uniquePositions = Array.from(
+  new Map(
+    (positions || [])
+      .filter((row) => row.symbol)
+      .map((row) => [row.symbol.trim(), row])
+  ).values()
+);
 
-    if (uniquePositions.length === 0) {
-      return [];
-    }
+if (uniquePositions.length === 0) {
+  return [];
+}
 
-    const symbols = uniquePositions.map((row) => row.symbol.trim());
+const symbols = uniquePositions.map((row) =>
+  normalizeSymbol(row.symbol)
+);
+
+console.log(
+  '[Angel] Sample position symbols:',
+  uniquePositions.slice(0, 5).map((r) => r.symbol)
+);
+
+console.log(
+  '[Angel] Normalized symbols:',
+  symbols.slice(0, 5)
+);
 
     // Query `stock_master` for tokens matching stock_name.
     // We normalize exchange values later, because stock_master may store null or lowercase exchange names.
@@ -112,8 +138,13 @@ async function getEquityPositionTokens() {
     return uniquePositions
       .map((row) => {
         const exchangeKey = ((row.exchange || 'NSE').toString().trim() || 'NSE').toUpperCase();
-        const symbolData = tokenMap.get(`${row.symbol.trim()}|${exchangeKey}`) || tokenMap.get(row.symbol.trim());
-        return {
+        const normalizedSymbol = normalizeSymbol(row.symbol);
+
+const symbolData =
+  tokenMap.get(`${normalizedSymbol}|${exchangeKey}`) ||
+  tokenMap.get(normalizedSymbol);
+     
+return {
           symbol: row.symbol,
           token: symbolData?.token,
           exchange: row.exchange || symbolData?.exchange || 'NSE'
@@ -125,6 +156,8 @@ async function getEquityPositionTokens() {
     return [];
   }
 }
+
+
 
 // --- LOGIN ---
 export async function loginToAngel() {
@@ -245,7 +278,17 @@ async function subscribeToPortfolioStocks() {
 
   try {
     // Subscribe only to symbols currently present in equity_positions
-    const symbolTokens = await getEquityPositionTokens();
+    const portfolioTokens = await getEquityPositionTokens();
+const symbolTokens = [...portfolioTokens];
+
+const uniqueSymbolTokens = Array.from(
+  new Map(
+    symbolTokens.map(item => [
+      `${item.exchange}|${item.token}`,
+      item
+    ])
+  ).values()
+);
 
     if (symbolTokens.length === 0) {
       console.warn('[Angel] No equity position symbols found for subscription.');
@@ -258,19 +301,21 @@ async function subscribeToPortfolioStocks() {
       'BSE': 3
     };
 
-    symbolTokens.forEach(s => {
-      const exchangeType = exchangeMap[s.exchange] || 1;
-      const token = s.token;
+    uniqueSymbolTokens.forEach((s) => {
+  const exchangeType = exchangeMap[s.exchange] || 1;
+  const token = s.token;
 
-      tokenToSymbolMap[token] = s.symbol;
+  tokenToSymbolMap[token] = s.symbol;
 
-      let entry = tokenList.find(t => t.exchangeType === exchangeType);
-      if (!entry) {
-        entry = { exchangeType, tokens: [] };
-        tokenList.push(entry);
-      }
-      entry.tokens.push(token);
-    });
+  let entry = tokenList.find(t => t.exchangeType === exchangeType);
+
+  if (!entry) {
+    entry = { exchangeType, tokens: [] };
+    tokenList.push(entry);
+  }
+
+  entry.tokens.push(token);
+});
 
     try {
       const mapSampleKeys = Object.keys(tokenToSymbolMap).slice(0, 10);
@@ -329,6 +374,178 @@ async function subscribeToPortfolioStocks() {
   }
 }
 
+
+
+async function resubscribeAllTokens() {
+
+if (!smartWS) {
+  console.warn('[Angel] smartWS is null, cannot resubscribe');
+  return;
+}
+  const portfolioTokens = await getEquityPositionTokens();
+
+  const allTokens = [
+    ...portfolioTokens,
+    ...Array.from(dynamicSubscriptions.values())
+  ];
+
+  const uniqueTokens = Array.from(
+    new Map(
+      allTokens.map(item => [
+        `${item.exchange}|${item.token}`,
+        item
+      ])
+    ).values()
+  );
+
+  const tokenList = [];
+  const exchangeMap = {
+    NSE: 1,
+    BSE: 3
+  };
+
+  uniqueTokens.forEach((s) => {
+    const exchangeType = exchangeMap[s.exchange] || 1;
+
+    let entry = tokenList.find(
+      t => t.exchangeType === exchangeType
+    );
+
+    if (!entry) {
+      entry = {
+        exchangeType,
+        tokens: []
+      };
+      tokenList.push(entry);
+    }
+
+    entry.tokens.push(s.token);
+  });
+
+  console.log(
+    '[Angel] Resubscribing total tokens:',
+    uniqueTokens.length
+  );
+
+  tokenList.forEach(item => {
+    item.tokens = [...new Set(item.tokens)];
+
+    const params = {
+      correlationID: `resync_${Date.now()}`,
+      action: 1,
+      mode: 3,
+      tokenList: [
+        {
+          exchangeType: item.exchangeType,
+          tokens: item.tokens
+        }
+      ]
+    };
+
+console.log(
+  '[Angel] WS methods:',
+  Object.keys(smartWS)
+);
+    if (typeof smartWS.subscribe === 'function') {
+  smartWS.subscribe(params);
+} else if (typeof smartWS.fetchData === 'function') {
+  smartWS.fetchData({
+    ...params,
+    exchangeType: item.exchangeType,
+    tokens: item.tokens
+  });
+} else {
+  console.error(
+    '[Angel] No subscribe or fetchData method found'
+  );
+}
+  });
+}
+
+export async function subscribeSingleStock(symbol) {
+  try {
+    // Already receiving ticks
+    if (lastTicks[symbol]) {
+      return true;
+    }
+
+    const normalized = normalizeSymbol(symbol);
+
+    const { data, error } = await supabase
+      .from('stock_master')
+      .select('stock_name, symbol_token, exchange')
+      .eq('stock_name', normalized)
+      .single();
+
+    if (error || !data) {
+      console.error('[Angel] Stock not found:', symbol);
+      return false;
+    }
+
+    const token = data.symbol_token;
+    const exchange = (data.exchange || 'NSE').toUpperCase();
+
+    tokenToSymbolMap[token] = symbol;
+
+dynamicSubscriptions.set(
+  `${exchange}|${token}`,
+  {
+    symbol,
+    token,
+    exchange
+  }
+);
+
+    const params = {
+      correlationID: `single_${Date.now()}`,
+      action: 1,
+      mode: 3,
+      tokenList: [
+        {
+          exchangeType: exchange === 'BSE' ? 3 : 1,
+          tokens: [token]
+        }
+      ]
+    };
+
+console.log(
+  '[Angel Subscribe Payload]',
+  JSON.stringify(params, null, 2)
+);
+
+console.log('[Angel] smartWS exists?', !!smartWS);
+
+if (!smartWS) {
+  console.warn('[Angel] smartWS is null');
+  return false;
+}
+
+console.log('Market WS available:', !!smartWS);
+
+await resubscribeAllTokens();
+
+console.log(
+  '[Angel] Subscribed token',
+  token,
+  'for',
+  symbol
+);
+
+console.log(
+  '[Angel] Dynamically subscribed:',
+  symbol,
+  token
+);
+
+return true;
+
+ } catch (err) {
+    console.error('[Angel] subscribeSingleStock error:', err);
+    return false;
+  }
+}
+
+
 // --- TICK HANDLING ---
 async function updateEquityPositionLastPrice(symbol, lastPrice) {
   try {
@@ -356,6 +573,13 @@ function handleTick(msg) {
     if (!msg || !msg.token) return;
     
     const rawToken = msg.token.toString().replace(/"/g, '');
+
+console.log(
+  '[Angel Tick]',
+  rawToken,
+  tokenToSymbolMap[rawToken],
+  parseFloat(msg.last_traded_price) / 100
+);
     const symbol = tokenToSymbolMap[rawToken] || rawToken;
     
     const tick = {
@@ -363,8 +587,13 @@ function handleTick(msg) {
       ltp: parseFloat(msg.last_traded_price) / 100
     };
 
+
+
+
+
     const previousTick = lastTicks[symbol];
     lastTicks[symbol] = tick;
+  
     broadcast(tick);
 
     if (!previousTick || previousTick.ltp !== tick.ltp) {
@@ -486,6 +715,10 @@ export function initLivePriceServer(server) {
   }, { timezone: "Asia/Kolkata" });
 
   return wss;
+}
+
+export function getLivePrice(symbol) {
+  return lastTicks[symbol]?.ltp || null;
 }
 
 export async function refreshAngelPositionSubscriptions() {

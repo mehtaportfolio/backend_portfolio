@@ -2,6 +2,7 @@ import * as zerodhaService from '../services/zerodhaService.js';
 import * as angelService from '../services/angelOneService.js';
 import { fetchAllRows, deleteRows } from '../db/queries.js';
 import { supabase } from '../db/supabaseClient.js';
+import { getLivePrice as getAngelLivePrice, subscribeSingleStock} from '../services/angelLiveService.js';
 
 /**
  * Get distinct brokers and accounts from stock_transactions
@@ -340,3 +341,56 @@ export async function getOrderStatus(req, res) {
     res.status(500).json({ error: error.message });
   }
 }
+
+
+
+export const getLivePrice = async (req, res) => {
+  const { symbol } = req.params;
+
+  let ltp = getAngelLivePrice(symbol);
+
+  if (ltp == null) {
+    await subscribeSingleStock(symbol);
+
+    return res.json({
+      success: true,
+      symbol,
+      ltp: null,
+      subscribing: true
+    });
+  }
+
+  return res.json({
+    success: true,
+    symbol,
+    ltp
+  });
+};
+
+export async function subscribeStock(req, res) {
+  try {
+    const { symbol } = req.body;
+
+    if (!symbol) {
+      return res.status(400).json({
+        success: false,
+        error: 'symbol is required'
+      });
+    }
+
+    await subscribeSingleStock(`${symbol}-EQ`);
+
+    return res.json({
+      success: true
+    });
+
+  } catch (err) {
+    console.error('[Subscribe Stock]', err);
+
+    return res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+}
+
