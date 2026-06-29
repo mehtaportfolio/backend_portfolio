@@ -213,149 +213,155 @@ export async function getOpenPositions(req, res) {
   }
 }
 
-export async function savePositionsToTransactions(req, res) {
-  try {
-    // Only fetch equity positions for today
-    const today = new Date().toISOString().split('T')[0];
-    const { data: positions, error: posErr } = await fetchAllRows(supabase, 'equity_positions', {
-      select: 'id, broker, account_id, symbol, isin, quantity, average_price, last_price, position_date, exchange',
-      filters: [(q) => q.eq('position_date', today)]
-    });
+async function savePositionsToTransactionsInternal(today) {
+  const { data: positions, error: posErr } = await fetchAllRows(supabase, 'equity_positions', {
+    select: 'id, broker, account_id, symbol, isin, quantity, average_price, last_price, position_date, exchange',
+    filters: [(q) => q.eq('position_date', today)]
+  });
 
-    if (posErr) return res.status(500).json({ error: posErr.message || 'Failed to fetch positions' });
-    if (!positions || positions.length === 0) return res.json({ inserted: 0, message: 'No positions to save' });
+  if (posErr) {
+    return { ok: false, status: 500, error: posErr.message || 'Failed to fetch positions' };
+  }
 
-    const rowsToInsert = [];
-    const missingPrice = [];
-    const skippedAccounts = [];
+  if (!positions || positions.length === 0) {
+    return { ok: true, inserted: 0, message: 'No positions to save' };
+  }
 
-    for (const pos of positions) {
-      const account_id = pos.account_id;
+  const rowsToInsert = [];
+  const missingPrice = [];
+  const skippedAccounts = [];
 
-      // account_name must not be empty; skip rows without account_id
-      if (!account_id) {
-        skippedAccounts.push({ id: pos.id, symbol: pos.symbol });
-        continue;
-      }
+  for (const pos of positions) {
+    const account_id = pos.account_id;
 
-      // average_price is required — if any row intended for insert lacks it, abort with error
-      if (pos.average_price == null) {
-        missingPrice.push({ id: pos.id, symbol: pos.symbol, account_id: account_id });
-        continue;
-      }
+    if (!account_id) {
+      skippedAccounts.push({ id: pos.id, symbol: pos.symbol });
+      continue;
+    }
 
-      const account_name = account_id === 'P811882' ? 'PM' : account_id;
-      const account_type = 'regular';
-      const equity_type = account_id === 'P811882' ? 'etf' : 'stock';
-      const buy_date = pos.position_date; // already filtered to today
-      const buy_price = Number(pos.average_price);
-      const quantity = pos.quantity != null ? Math.round(Number(pos.quantity)) : 0;
-      const broker_name = pos.broker || null;
+    if (pos.average_price == null) {
+      missingPrice.push({ id: pos.id, symbol: pos.symbol, account_id });
+      continue;
+    }
 
-      // Resolve stock_name via stock_symbols -> stock_master mapping
-      let stock_name = pos.symbol || '';
-      let mappingFound = false;
-      try {
-        const { data: symData, error: symErr } = await supabase
-          .from('stock_symbols')
-          .select('symbol_token')
-          .eq('symbol', pos.symbol)
-          .eq('exchange', pos.exchange)
+    const account_name = account_id === 'P811882' ? 'PM' : account_id;
+    const account_type = 'regular';
+    const equity_type = account_id === 'P811882' ? 'etf' : 'stock';
+    const buy_date = pos.position_date;
+    const buy_price = Number(pos.average_price);
+    const quantity = pos.quantity != null ? Math.round(Number(pos.quantity)) : 0;
+    const broker_name = pos.broker || null;
+
+    let stock_name = pos.symbol || '';
+    let mappingFound = false;
+    try {
+      const { data: symData, error: symErr } = await supabase
+        .from('stock_symbols')
+        .select('symbol_token')
+        .eq('symbol', pos.symbol)
+        .eq('exchange', pos.exchange)
+        .limit(1)
+        .single();
+
+      if (!symErr && symData && symData.symbol_token != null) {
+        const token = String(symData.symbol_token);
+        const { data: masterData, error: masterErr } = await supabase
+          .from('stock_master')
+          .select('stock_name')
+          .eq('symbol_token', token)
           .limit(1)
           .single();
-
-        if (!symErr && symData && symData.symbol_token != null) {
-          const token = String(symData.symbol_token);
-          const { data: masterData, error: masterErr } = await supabase
-            .from('stock_master')
-            .select('stock_name')
-            .eq('symbol_token', token)
-            .limit(1)
-            .single();
-          if (!masterErr && masterData && masterData.stock_name) {
-            stock_name = masterData.stock_name;
-            mappingFound = true;
-          }
+        if (!masterErr && masterData && masterData.stock_name) {
+          stock_name = masterData.stock_name;
+          mappingFound = true;
         }
-      } catch (e) {
-        // ignore mapping error and fallback to symbol with suffix removal
       }
-
-      // If mapping not found, strip suffix like -EQ or _EQ from symbol
-      if (!mappingFound && stock_name) {
-        stock_name = stock_name.replace(/[-_]EQ$/i, '');
-      }
-
-      rowsToInsert.push({
-        account_name,
-        account_type,
-        equity_type,
-        buy_date,
-        sell_date: null,
-        quantity,
-        buy_price,
-        sell_price: null,
-        stock_name,
-        broker_name,
-      });
+    } catch (e) {
+      // ignore mapping error and fallback to symbol with suffix removal
     }
 
-    // If any positions are missing average_price, abort and return error
-    if (missingPrice.length > 0) {
-      return res.status(400).json({ error: 'Missing average_price for some positions', missing: missingPrice });
+    if (!mappingFound && stock_name) {
+      stock_name = stock_name.replace(/[-_]EQ$/i, '');
     }
 
-    if (rowsToInsert.length === 0) {
-      return res.json({ inserted: 0, skipped: skippedAccounts.length, message: 'No valid positions to insert' });
-    }
-
-    // Fetch existing transactions to check for duplicates
-    const { data: existingTransactions, error: fetchErr } = await supabase
-      .from('stock_transactions')
-      .select('account_name, equity_type, buy_date, stock_name, broker_name');
-
-    if (fetchErr) {
-      console.error('[BuyOrder] Failed to fetch existing transactions:', fetchErr.message);
-      return res.status(500).json({ error: 'Failed to check for duplicates' });
-    }
-
-    // Build a set of existing combinations for fast lookup
-    const existingSet = new Set();
-    for (const existing of existingTransactions || []) {
-      const key = `${existing.account_name}|${existing.equity_type}|${existing.buy_date}|${existing.stock_name}|${existing.broker_name}`;
-      existingSet.add(key);
-    }
-
-    // Filter out duplicates
-    const rowsToInsertFiltered = [];
-    const duplicates = [];
-    
-    for (const row of rowsToInsert) {
-      const key = `${row.account_name}|${row.equity_type}|${row.buy_date}|${row.stock_name}|${row.broker_name}`;
-      if (existingSet.has(key)) {
-        duplicates.push(row);
-      } else {
-        rowsToInsertFiltered.push(row);
-      }
-    }
-
-    if (rowsToInsertFiltered.length === 0) {
-      return res.json({ inserted: 0, skipped: skippedAccounts.length, duplicates: duplicates.length, message: 'All positions already exist (duplicates)' });
-    }
-
-    // Insert only non-duplicate rows into stock_transactions
-    const { data: inserted, error: insertErr } = await supabase.from('stock_transactions').insert(rowsToInsertFiltered).select();
-    if (insertErr) {
-      console.error('[BuyOrder] savePositionsToTransactions insert error:', insertErr.message || insertErr);
-      return res.status(500).json({ error: insertErr.message || 'Failed to insert transactions' });
-    }
-
-    return res.json({ 
-      inserted: (inserted || []).length, 
-      rows: inserted, 
-      skipped: skippedAccounts.length,
-      duplicates: duplicates.length
+    rowsToInsert.push({
+      account_name,
+      account_type,
+      equity_type,
+      buy_date,
+      sell_date: null,
+      quantity,
+      buy_price,
+      sell_price: null,
+      stock_name,
+      broker_name,
     });
+  }
+
+  if (missingPrice.length > 0) {
+    return { ok: false, status: 400, error: 'Missing average_price for some positions', missing: missingPrice };
+  }
+
+  if (rowsToInsert.length === 0) {
+    return { ok: true, inserted: 0, skipped: skippedAccounts.length, message: 'No valid positions to insert' };
+  }
+
+  const { data: existingTransactions, error: fetchErr } = await supabase
+    .from('stock_transactions')
+    .select('account_name, equity_type, buy_date, stock_name, broker_name');
+
+  if (fetchErr) {
+    console.error('[BuyOrder] Failed to fetch existing transactions:', fetchErr.message);
+    return { ok: false, status: 500, error: 'Failed to check for duplicates' };
+  }
+
+  const existingSet = new Set();
+  for (const existing of existingTransactions || []) {
+    const key = `${existing.account_name}|${existing.equity_type}|${existing.buy_date}|${existing.stock_name}|${existing.broker_name}`;
+    existingSet.add(key);
+  }
+
+  const rowsToInsertFiltered = [];
+  const duplicates = [];
+
+  for (const row of rowsToInsert) {
+    const key = `${row.account_name}|${row.equity_type}|${row.buy_date}|${row.stock_name}|${row.broker_name}`;
+    if (existingSet.has(key)) {
+      duplicates.push(row);
+    } else {
+      rowsToInsertFiltered.push(row);
+    }
+  }
+
+  if (rowsToInsertFiltered.length === 0) {
+    return { ok: true, inserted: 0, skipped: skippedAccounts.length, duplicates: duplicates.length, message: 'All positions already exist (duplicates)' };
+  }
+
+  const { data: inserted, error: insertErr } = await supabase.from('stock_transactions').insert(rowsToInsertFiltered).select();
+  if (insertErr) {
+    console.error('[BuyOrder] savePositionsToTransactions insert error:', insertErr.message || insertErr);
+    return { ok: false, status: 500, error: insertErr.message || 'Failed to insert transactions' };
+  }
+
+  return {
+    ok: true,
+    inserted: (inserted || []).length,
+    rows: inserted,
+    skipped: skippedAccounts.length,
+    duplicates: duplicates.length
+  };
+}
+
+export async function savePositionsToTransactions(req, res) {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const result = await savePositionsToTransactionsInternal(today);
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
+    }
+
+    return res.json(result);
   } catch (err) {
     console.error('[BuyOrder] savePositionsToTransactions error:', err.message);
     res.status(500).json({ error: err.message || 'Internal error' });
@@ -364,6 +370,7 @@ export async function savePositionsToTransactions(req, res) {
 
 export async function syncOpenPositions(req, res) {
   try {
+    const today = new Date().toISOString().split('T')[0];
     const syncResults = [];
     const zerodhaAccounts = ['PM', 'PDM', 'PSM'];
 
@@ -406,8 +413,28 @@ export async function syncOpenPositions(req, res) {
       await refreshAngelPositionSubscriptions();
     } catch (refreshErr) {
       console.error('[BuyOrder] refreshAngelPositionSubscriptions error:', refreshErr.message);
-      // Continue returning sync summary even if live price refresh fails
     }
+
+    const saveResult = await savePositionsToTransactionsInternal(today);
+    if (!saveResult.ok) {
+      return res.status(saveResult.status || 500).json({
+        success: false,
+        ...response,
+        save: saveResult,
+        error: saveResult.error || 'Failed to save positions'
+      });
+    }
+
+    response.success = true;
+    response.save = saveResult;
+    response.inserted = saveResult.inserted || 0;
+    response.duplicates = saveResult.duplicates || 0;
+    response.skipped = saveResult.skipped || 0;
+    response.message = saveResult.inserted > 0
+      ? `Synced positions from brokers and saved ${saveResult.inserted} transaction${saveResult.inserted === 1 ? '' : 's'}`
+      : saveResult.duplicates > 0
+        ? `Synced positions from brokers; ${saveResult.duplicates} duplicate${saveResult.duplicates === 1 ? '' : 's'} skipped`
+        : 'Synced positions from brokers; no new transactions were created';
 
     return res.json(response);
   } catch (err) {
