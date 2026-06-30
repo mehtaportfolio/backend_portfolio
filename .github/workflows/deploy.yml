@@ -17,21 +17,22 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            set -e
+  set -e
 
-            cd ~/backend_portfolio
+  cd ~/backend_portfolio
 
-            echo "Fetching latest code..."
-            git fetch origin
-            git reset --hard origin/main
+  echo "Fetching latest code..."
+  git fetch origin
+  git reset --hard origin/main
 
-            echo "Installing dependencies..."
-            npm ci
+  if git diff --name-only HEAD@{1} HEAD | grep -q "^package-lock.json$"; then
+    echo "Dependencies changed. Installing..."
+    npm ci
+  else
+    echo "No dependency changes. Skipping npm install."
+  fi
 
-            echo "Restarting backend..."
-            pm2 restart portfolio-backend
+  pm2 restart portfolio-backend
+  pm2 save
 
-            echo "Saving PM2 configuration..."
-            pm2 save
-
-            echo "Deployment completed successfully."
+  echo "Deployment completed successfully."
