@@ -31,4 +31,4 @@ jobs:
             echo "Step 4"
             pm2 restart portfolio-backend
 
-            echo "Finished"
+            echo "Finisheds"
