@@ -170,7 +170,7 @@ async function zerodhaCallback(req, res) {
 }
 
 // ===============================
-// FETCH AND AGGREGATE TRADES
+// FETCH AND AGGREGATE TODAY'S OPEN POSITIONS FROM ORDERS
 // ===============================
 async function fetchAndAggregateTradesForAccount(accountId) {
   try {
@@ -201,75 +201,79 @@ async function fetchAndAggregateTradesForAccount(accountId) {
       access_token: tokenData.access_token
     });
 
-    const trades = await kite.getTrades();
+    const orders = await kite.getOrders();
     const today = new Date().toISOString().split('T')[0];
 
-    const deliveryBuyToday = trades.filter((t) => {
-      const isCNC = t.product?.toUpperCase() === 'CNC';
-      const isBUY = t.transaction_type?.toUpperCase() === 'BUY';
-      const ts = t.fill_timestamp || t.exchange_timestamp;
+    const todayOrders = (orders || []).filter((order) => {
+      const txnType = String(order.transaction_type || order.order_type || '').toUpperCase();
+      if (!['BUY', 'SELL'].includes(txnType)) return false;
+
+      const ts = order.order_timestamp || order.exchange_timestamp || order.fill_timestamp || order.updated_at || order.order_time;
       if (!ts) return false;
 
-      let tradeDateStr;
       try {
-        tradeDateStr = new Date(ts).toISOString().split('T')[0];
+        return new Date(ts).toISOString().split('T')[0] === today;
       } catch (err) {
-        console.error('Date parse error for trade:', ts);
         return false;
       }
-
-      return isCNC && isBUY && tradeDateStr === today;
     });
 
-    if (deliveryBuyToday.length === 0) {
-      const firstTrade = trades.length > 0 ? trades[0] : null;
-      const firstTradeStr = firstTrade
-        ? `[Prod: ${firstTrade.product}, Type: ${firstTrade.transaction_type}, Fill: ${firstTrade.fill_timestamp}, Exch: ${firstTrade.exchange_timestamp}]`
-        : 'None';
+    const lotBuckets = new Map();
 
-      return {
-        success: true,
-        message: `No CNC BUY trades found for today (${today}) in ${accountId}. Total trades found: ${trades.length}. First trade: ${firstTradeStr}`,
-        data: [],
-        trades,
-        formatted: [],
-        inserted: 0,
-        updated: 0,
-        today
-      };
+    const isCompletedOrder = (order) => {
+      const status = String(order.status || '').toUpperCase();
+      return status === 'COMPLETE' || status === 'FILLED' || status === 'TRADED' || status === 'VALIDATED' || status === 'EXECUTED' || status === '';
+    };
+
+    const normalizeSymbol = (order) => order.tradingsymbol || order.symbol || order.trading_symbol || order.tradingSymbol || order.instrument || order.name || '';
+    const normalizeQty = (order) => Number(order.filled_quantity ?? order.quantity ?? order.order_quantity ?? order.pending_quantity ?? 0);
+    const normalizePrice = (order) => Number(order.average_price ?? order.price ?? order.fill_price ?? order.trigger_price ?? 0);
+
+    for (const order of todayOrders) {
+      if (!isCompletedOrder(order)) continue;
+
+      const symbol = normalizeSymbol(order);
+      const qty = normalizeQty(order);
+      if (!symbol || qty <= 0) continue;
+
+      const txnType = String(order.transaction_type || order.order_type || '').toUpperCase();
+      const price = normalizePrice(order);
+      const bucket = lotBuckets.get(symbol) || [];
+
+      if (txnType === 'BUY') {
+        bucket.push({ qty, price, ts: order.order_timestamp || order.exchange_timestamp || order.fill_timestamp || order.updated_at || order.order_time });
+      } else if (txnType === 'SELL') {
+        let remaining = qty;
+        while (remaining > 0 && bucket.length > 0) {
+          const lot = bucket[0];
+          const consumed = Math.min(remaining, lot.qty);
+          lot.qty -= consumed;
+          remaining -= consumed;
+          if (lot.qty <= 0) bucket.shift();
+        }
+      }
+
+      lotBuckets.set(symbol, bucket);
     }
 
-    const aggregation = {};
-    deliveryBuyToday.forEach((t) => {
-      const symbol = t.tradingsymbol;
-      if (!aggregation[symbol]) {
-        aggregation[symbol] = {
-          symbol,
-          isin: t.isin || null,
-          total_qty: 0,
-          total_cost: 0,
-          account_id: accountId,
-          date: today,
-          broker: 'Zerodha',
-          product: t.product || 'CNC',
-          exchange: t.exchange || 'NSE'
-        };
-      }
-      aggregation[symbol].total_qty += Number(t.quantity);
-      aggregation[symbol].total_cost += Number(t.quantity) * Number(t.average_price);
-    });
+    const finalData = [];
+    for (const [symbol, lots] of lotBuckets.entries()) {
+      const remainingQty = lots.reduce((sum, lot) => sum + lot.qty, 0);
+      if (remainingQty <= 0) continue;
 
-    const finalData = Object.values(aggregation).map((item) => ({
-      broker: item.broker,
-      account_id: item.account_id,
-      symbol: item.symbol,
-      isin: item.isin,
-      quantity: item.total_qty,
-      average_price: parseFloat((item.total_cost / item.total_qty).toFixed(2)),
-      product: item.product,
-      exchange: item.exchange,
-      position_date: item.date
-    }));
+      const weightedAverage = lots.reduce((sum, lot) => sum + (lot.qty * lot.price), 0) / remainingQty;
+      finalData.push({
+        broker: 'Zerodha',
+        account_id: accountId,
+        symbol,
+        isin: null,
+        quantity: Math.round(remainingQty),
+        average_price: parseFloat(weightedAverage.toFixed(2)),
+        product: 'CNC',
+        exchange: 'NSE',
+        position_date: today
+      });
+    }
 
     await supabase
       .from('equity_positions')
@@ -328,7 +332,7 @@ async function fetchAndAggregateTradesForAccount(accountId) {
           ? `Successfully processed ${dataToInsert.length} new and ${dataToUpdate.length} updated stocks`
           : 'All stocks already exist for today',
       data: [...dataToInsert, ...dataToUpdate],
-      trades,
+      orders: todayOrders,
       formatted: finalData,
       inserted: dataToInsert.length,
       updated: dataToUpdate.length,

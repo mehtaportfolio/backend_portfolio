@@ -341,7 +341,7 @@ export async function syncMarketData() {
 }
 
 /**
- * Fetch and store today's buy trades
+ * Fetch and store today's net open positions from order book
  */
 export async function fetchTodayBuyTrades() {
     ensureSmartApi();
@@ -351,79 +351,103 @@ export async function fetchTodayBuyTrades() {
     }
 
     try {
-        log("Fetching today's tradebook...");
-        const response = await smartApi.getTradeBook();
+        log("Fetching today's order book...");
+        const response = await smartApi.getOrderBook();
 
         if (!response.status) {
-            log(`Tradebook API failed: ${response.message}`, 'ERROR');
+            log(`Orderbook API failed: ${response.message}`, 'ERROR');
             if (response.message === 'Invalid Token' || response.message.includes('Token expired') || response.errorcode === 'AG8001') {
                 sessionData = null;
             }
             return;
         }
 
-        const trades = response.data || [];
-        if (trades.length === 0) {
-            log("No trades found for today.");
+        const orders = response.data || [];
+        if (orders.length === 0) {
+            log("No orders found for today.");
             return {
-                message: "No trades found for today",
-                trades: [],
+                message: "No orders found for today",
+                orders: [],
                 formatted: [],
                 inserted: 0,
                 updated: 0
             };
         }
 
-        // Aggregate buy trades
-        const grouped = {};
-        const clientId = process.env.ANGEL_CLIENT_ID;
+        const today = new Date().toISOString().split("T")[0];
+        const todayOrders = orders.filter((order) => {
+            const txnType = String(order.transactiontype || order.transactionType || '').toUpperCase();
+            if (!['BUY', 'SELL'].includes(txnType)) return false;
 
-        trades.forEach(t => {
-            if (t.transactiontype !== "BUY") return;
+            const ts = order.orderdate || order.orderdatetime || order.filltime || order.filltime || order.datetime || order.updatedtime;
+            if (!ts) return false;
 
-            const symbol = t.tradingsymbol || t.tradingSymbol || t.symbol;
-            const exchange = t.exchange || t.exch_seg;
-            const key = `${symbol}_${exchange}`;
-
-            if (!grouped[key]) {
-                grouped[key] = {
-                    symbol: symbol,
-                    exchange: exchange,
-                    isin: t.isin || null,
-                    product: t.producttype || t.product,
-                    totalQty: 0,
-                    totalValue: 0
-                };
-            }
-
-            const qty = Number(t.quantity || t.fillsize || t.fillquantity || 0);
-            const price = Number(t.price || t.fillprice || t.averageprice || 0);
-
-            if (!isNaN(qty) && !isNaN(price)) {
-                grouped[key].totalQty += qty;
-                grouped[key].totalValue += qty * price;
+            try {
+                return new Date(ts).toISOString().split('T')[0] === today;
+            } catch (err) {
+                return false;
             }
         });
 
-        const formatted = Object.values(grouped).map(g => ({
-            broker: "angel",
-            account_id: clientId,
-            symbol: g.symbol,
-            isin: g.isin,
-            quantity: g.totalQty,
-            average_price: g.totalQty > 0 ? Number((g.totalValue / g.totalQty).toFixed(2)) : 0,
-            last_price: 0,
-            pnl: 0,
-            product: g.product,
-            exchange: g.exchange,
-            position_date: new Date().toISOString().split("T")[0],
-            fetched_at: new Date().toISOString()
-        }));
+        const isCompletedOrder = (order) => {
+            const status = String(order.status || '').toUpperCase();
+            return status === 'COMPLETE' || status === 'FILLED' || status === 'TRADED' || status === 'EXECUTED' || status === 'VALIDATED' || status === '';
+        };
 
-        const today = new Date().toISOString().split("T")[0];
+        const lotBuckets = new Map();
+        const clientId = process.env.ANGEL_CLIENT_ID;
+
+        todayOrders.forEach((order) => {
+            if (!isCompletedOrder(order)) return;
+
+            const symbol = order.tradingsymbol || order.tradingSymbol || order.symbol || order.symbolname || '';
+            const qty = Number(order.quantity || order.fillsize || order.fillquantity || order.orderquantity || 0);
+            const price = Number(order.averageprice || order.fillprice || order.price || order.avgprice || 0);
+            const txnType = String(order.transactiontype || order.transactionType || '').toUpperCase();
+
+            if (!symbol || qty <= 0) return;
+
+            const bucket = lotBuckets.get(symbol) || [];
+
+            if (txnType === 'BUY') {
+                bucket.push({ qty, price });
+            } else if (txnType === 'SELL') {
+                let remaining = qty;
+                while (remaining > 0 && bucket.length > 0) {
+                    const lot = bucket[0];
+                    const consumed = Math.min(remaining, lot.qty);
+                    lot.qty -= consumed;
+                    remaining -= consumed;
+                    if (lot.qty <= 0) bucket.shift();
+                }
+            }
+
+            lotBuckets.set(symbol, bucket);
+        });
+
+        const formatted = [];
+        for (const [symbol, lots] of lotBuckets.entries()) {
+            const remainingQty = lots.reduce((sum, lot) => sum + lot.qty, 0);
+            if (remainingQty <= 0) continue;
+
+            const weightedAverage = lots.reduce((sum, lot) => sum + (lot.qty * lot.price), 0) / remainingQty;
+            formatted.push({
+                broker: "angel",
+                account_id: clientId,
+                symbol,
+                isin: null,
+                quantity: Math.round(remainingQty),
+                average_price: Number(weightedAverage.toFixed(2)),
+                last_price: 0,
+                pnl: 0,
+                product: 'DELIVERY',
+                exchange: 'NSE',
+                position_date: today,
+                fetched_at: new Date().toISOString()
+            });
+        }
 
         // 1. Delete rows with date < today (Requirement 1)
-        // irrespective of account_id or anything else
         await deleteRows(supabase, 'equity_positions', (q) => q.lt('position_date', today));
 
         // 2. Fetch existing today's records for this account to compare (Requirement 2)
@@ -457,7 +481,7 @@ export async function fetchTodayBuyTrades() {
             if (insertError) {
                 log(`Error inserting trades: ${insertError.message}`, 'ERROR');
             } else {
-                log(`✅ Inserted ${dataToInsert.length} new aggregated BUY trades for ${clientId}.`);
+                log(`✅ Inserted ${dataToInsert.length} new net positions for ${clientId}.`);
                 insertedCount = dataToInsert.length;
             }
         }
@@ -476,19 +500,19 @@ export async function fetchTodayBuyTrades() {
                 if (updateError) {
                     log(`Error updating trades: ${updateError.message}`, 'ERROR');
                 } else {
-                    log(`✅ Updated aggregated BUY trade for ${item.symbol} (${clientId}).`);
+                    log(`✅ Updated net position for ${item.symbol} (${clientId}).`);
                     updatedCount++;
                 }
             }
         }
 
         if (dataToInsert.length === 0 && dataToUpdate.length === 0) {
-            log(`ℹ️ No new or updated trades for ${clientId} (all were duplicates).`);
+            log(`ℹ️ No new or updated net positions for ${clientId} (all were duplicates).`);
         }
 
         return {
             success: true,
-            trades: trades,
+            orders: todayOrders,
             formatted: formatted,
             inserted: insertedCount,
             updated: updatedCount,
