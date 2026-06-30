@@ -128,12 +128,12 @@ const PORT = process.env.PORT || 3001;
 // -------------------------------------------------------------
 // Global Middleware
 const rawCorsOrigins = process.env.CORS_ORIGIN || 'http://localhost:3000,https://mehta-wealths-dashboard.vercel.app';
-console.log("RAW:", rawCorsOrigins);
+
 const allowedOrigins = rawCorsOrigins
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
-  console.log("ALLOWED:", JSON.stringify(allowedOrigins));
+  
 
 app.use(
   cors({

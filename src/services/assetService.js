@@ -921,7 +921,10 @@ export async function getMFRawCasEntries() {
       order: { column: 'created_at', ascending: false }
     });
     if (error) throw error;
-    return data || [];
+    return (data || []).filter((row) => {
+      const fundName = String(row?.fund_full_name || "").trim().toLowerCase();
+      return fundName !== 'unknown fund';
+    });
   } catch (error) {
     console.error('Error in getMFRawCasEntries:', error);
     throw error;
