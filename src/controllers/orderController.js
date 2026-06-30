@@ -201,6 +201,45 @@ export async function getOpenTransactions(req, res) {
   }
 }
 
+function looksLikeUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
+}
+
+async function resolveTransactionIdForSell({ broker, account_id, symbol, quantity }) {
+  const normalizedBroker = String(broker || '').trim().toLowerCase();
+  const normalizedAccount = String(account_id || '').trim();
+  const normalizedSymbol = String(symbol || '').trim();
+  const normalizedQuantity = Number(quantity || 0);
+
+  if (!normalizedAccount || !normalizedSymbol) {
+    return null;
+  }
+
+  let query = supabase
+    .from('stock_transactions')
+    .select('id')
+    .eq('account_name', normalizedAccount)
+    .eq('stock_name', normalizedSymbol)
+    .is('sell_date', null);
+
+  if (normalizedBroker) {
+    query = query.ilike('broker_name', `%${normalizedBroker}%`);
+  }
+
+  if (normalizedQuantity > 0) {
+    query = query.eq('quantity', normalizedQuantity);
+  }
+
+  const { data, error } = await query.order('buy_date', { ascending: false }).limit(1);
+
+  if (error) {
+    console.error('[orderController] Failed resolving stock transaction id:', error.message);
+    return null;
+  }
+
+  return data?.[0]?.id || null;
+}
+
 async function resolveAngelSymbolToken(symbol) {
   const stockName = (symbol || '').trim();
   if (!stockName) {
@@ -257,6 +296,20 @@ export async function placeSellOrder(req, res) {
     }
 
     if (result.success) {
+      let resolvedTransactionId = null;
+      if (transaction_id && looksLikeUuid(transaction_id)) {
+        resolvedTransactionId = String(transaction_id).trim();
+      }
+
+      if (!resolvedTransactionId) {
+        resolvedTransactionId = await resolveTransactionIdForSell({ broker, account_id, symbol, quantity });
+      }
+
+      if (!resolvedTransactionId) {
+        console.error('[orderController] Unable to resolve stock transaction id for broker order tracking', { broker, account_id, symbol, quantity, transaction_id });
+        return res.status(409).json({ error: 'Unable to resolve the underlying stock transaction for tracking this sell order.' });
+      }
+
       // Store the order in a new 'orders' table for tracking
       const { error: orderError } = await supabase
         .from('broker_orders')
@@ -267,13 +320,13 @@ export async function placeSellOrder(req, res) {
           symbol,
           quantity,
           price,
-          transaction_id: transaction_id || null,
+          transaction_id: resolvedTransactionId,
           status: 'OPEN',
           created_at: new Date().toISOString()
         }]);
 
       if (orderError) {
-        console.error("Error storing order in DB:", orderError.message);
+        console.error("Error storing order in DB:", orderError.message, { broker, account_id, symbol, quantity, resolvedTransactionId });
         return res.status(500).json({ error: "Failed to store broker order", details: orderError.message });
       }
 

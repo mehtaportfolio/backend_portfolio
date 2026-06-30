@@ -17,12 +17,22 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-          script: |
-            cd ~/backend_portfolio
+script: |
+  set -e
 
-            git fetch origin
-            git reset --hard origin/main
+  cd ~/backend_portfolio
 
-            npm install
+  echo "Fetching latest code..."
+  git fetch origin
+  git reset --hard origin/main
 
-            pm2 restart portfolio-backend
+  echo "Installing dependencies..."
+  npm ci
+
+  echo "Restarting backend..."
+  pm2 restart portfolio-backend
+
+  echo "Saving PM2 configuration..."
+  pm2 save
+
+  echo "Deployment completed successfully."

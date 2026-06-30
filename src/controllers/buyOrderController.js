@@ -179,6 +179,26 @@ export async function getOpenPositions(req, res) {
     }
 
     // Format positions with PnL calculation
+    const { data: openTransactions, error: txError } = await fetchAllRows(supabase, 'stock_transactions', {
+      select: 'id, account_name, stock_name, quantity',
+      filters: [(q) => q.is('sell_date', null)],
+      chunkSize: 1000,
+    });
+
+    if (txError) {
+      console.error('[BuyOrder] Failed to fetch open transactions for position mapping:', txError.message);
+    }
+
+    const transactionIdMap = new Map();
+    if (!txError && openTransactions) {
+      openTransactions.forEach((tx) => {
+        const key = `${String(tx.account_name || '').toLowerCase()}::${String(tx.stock_name || '').toLowerCase()}::${Number(tx.quantity || 0)}`;
+        if (!transactionIdMap.has(key)) {
+          transactionIdMap.set(key, tx.id);
+        }
+      });
+    }
+
     const formattedPositions = positions.map(pos => {
       // Use last_price from equity_positions, fall back to average_price if not available
       const ltp = parseFloat(pos.last_price) || parseFloat(pos.average_price) || 0;
@@ -190,8 +210,12 @@ export async function getOpenPositions(req, res) {
       const pnl = current - invested;
       const pnlPercent = invested > 0 ? (pnl / invested) * 100 : 0;
 
+      const txKey = `${String(pos.account_id || '').toLowerCase()}::${String(pos.symbol || '').toLowerCase()}::${qty}`;
+      const transactionId = transactionIdMap.get(txKey) || null;
+
       return {
         id: pos.id,
+        transaction_id: transactionId,
         broker: (pos.broker || 'unknown').charAt(0).toUpperCase() + (pos.broker || 'unknown').slice(1),
         account: pos.account_id || 'N/A',
         symbol: pos.symbol,
