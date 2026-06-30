@@ -17,7 +17,18 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            echo "Connected"
+
+            echo "Step 1"
             cd ~/backend_portfolio
+
+            echo "Step 2"
             git fetch origin
+
+            echo "Step 3"
             git reset --hard origin/main
+
+            echo "Step 4"
             pm2 restart portfolio-backend
+
+            echo "Finished"
