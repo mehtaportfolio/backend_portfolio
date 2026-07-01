@@ -5,34 +5,40 @@ import logEmitter from '../utils/logger.js';
 /**
  * Runs the gmailCasService with dependency checks
  */
-export async function runGmailCasAutomation() {
+export async function runGmailCasAutomation(account = null) {
     console.log(`🚀 [Automation] Starting gmailCasService automation...`);
 
-    const accounts = ['PM', 'PSM'];
+    const accounts = account ? [account] : ['PM', 'PSM'];
+
     let overallSuccess = true;
     let errors = [];
 
-    for (const account of accounts) {
+    for (const acc of accounts) {
         try {
-            const result = await fetchAndProcessGmailCAS(account);
+            const result = await fetchAndProcessGmailCAS(acc);
+
             if (!result.success) {
                 overallSuccess = false;
-                errors.push(`${account}: ${result.message}`);
+                errors.push(`${acc}: ${result.message}`);
             } else {
-                console.log(`✅ [Automation] Successfully processed Gmail CAS for ${account}`);
+                console.log(`✅ [Automation] Successfully processed Gmail CAS for ${acc}`);
             }
         } catch (err) {
             overallSuccess = false;
-            console.error(`❌ [Automation] Failed to process Gmail CAS for ${account}:`, err.message);
-            errors.push(`${account}: ${err.message}`);
+            console.error(`❌ [Automation] Failed to process Gmail CAS for ${acc}:`, err.message);
+            errors.push(`${acc}: ${err.message}`);
         }
     }
 
+    const logName = account
+        ? `gmailCasService-${account}`
+        : 'gmailCasService';
+
     if (overallSuccess) {
-        await logEmitter.logScriptRun('gmailCasService', 'success');
+        await logEmitter.logScriptRun(logName, 'success');
         return true;
     } else {
-        await logEmitter.logScriptRun('gmailCasService', 'failed', errors.join('; '));
+        await logEmitter.logScriptRun(logName, 'failed', errors.join('; '));
         return false;
     }
 }
@@ -67,16 +73,22 @@ export async function pruneLogs() {
  * Initialize all cron jobs for CAS automation
  */
 export function initCasAutomation(cron) {
-    // 1. gmailCasService every 8 hours
-    cron.schedule('0 */8 * * *', async () => {
-        console.log('⏰ [Cron] Triggering gmailCasService automation (Every 8 hours)...');
-        await runGmailCasAutomation();
-    });
+// PM - Every Sunday at 9:00 AM
+cron.schedule('0 9 * * 0', async () => {
+    console.log('⏰ [Cron] Running PM CAS automation...');
+    await runGmailCasAutomation('PM');
+});
 
-    // 2. Prune logs daily at midnight
-    cron.schedule('0 0 * * *', async () => {
-        await pruneLogs();
-    });
+// PSM - Every Sunday at 2:00 PM
+cron.schedule('0 14 * * 0', async () => {
+    console.log('⏰ [Cron] Running PSM CAS automation...');
+    await runGmailCasAutomation('PSM');
+});
 
-    console.log('✅ [Automation] CAS Automation (Gmail only) initialized');
+// Prune logs daily at midnight
+cron.schedule('0 0 * * *', async () => {
+    await pruneLogs();
+});
+
+console.log('✅ [Automation] CAS Automation initialized');
 }

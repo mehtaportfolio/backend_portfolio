@@ -569,49 +569,50 @@ async function updateEquityPositionLastPrice(symbol, lastPrice) {
 }
 
 function handleTick(msg) {
-  try {
-    if (!msg || !msg.token) return;
-    
-    const rawToken = msg.token.toString().replace(/"/g, '');
 
-console.log(
-  '[Angel Tick]',
-  rawToken,
-  tokenToSymbolMap[rawToken],
-  parseFloat(msg.last_traded_price) / 100
-);
-    const symbol = tokenToSymbolMap[rawToken] || rawToken;
-    
-    const tick = {
-      symbol,
-      ltp: parseFloat(msg.last_traded_price) / 100
-    };
+    console.log("========== HANDLE TICK CALLED ==========");
+    console.dir(msg, { depth: null });
 
+    try {
 
+        if (!msg) {
+            console.log("msg is null");
+            return;
+        }
 
+        if (!msg.token) {
+            console.log("No token field");
+            return;
+        }
 
+        const rawToken = msg.token.toString().replace(/"/g, '');
 
-    const previousTick = lastTicks[symbol];
-    lastTicks[symbol] = tick;
-  
-    broadcast(tick);
+        console.log(
+            '[Angel Tick]',
+            rawToken,
+            tokenToSymbolMap[rawToken],
+            parseFloat(msg.last_traded_price) / 100
+        );
 
-    if (!previousTick || previousTick.ltp !== tick.ltp) {
-      // Debug: if token didn't map to a symbol or symbol not in equity positions
-      if (!tokenToSymbolMap[rawToken]) {
-        console.warn(`[Angel] Received tick for unmapped token ${rawToken} (ltp=${tick.ltp}).`);
-      }
-      if (!equityPositionSymbols.has(symbol)) {
-        // symbol might be raw token or in different format
-        console.warn(`[Angel] Tick symbol '${symbol}' not found in equityPositionSymbols set (${equityPositionSymbols.size}).`);
-      }
+        const symbol = tokenToSymbolMap[rawToken] || rawToken;
 
-      updateEquityPositionLastPrice(symbol, tick.ltp);
+        const tick = {
+            symbol,
+            ltp: parseFloat(msg.last_traded_price) / 100
+        };
+
+        const previousTick = lastTicks[symbol];
+        lastTicks[symbol] = tick;
+
+        broadcast(tick);
+
+        if (!previousTick || previousTick.ltp !== tick.ltp) {
+            updateEquityPositionLastPrice(symbol, tick.ltp);
+        }
+
+    } catch (err) {
+        console.error(err);
     }
-
-  } catch (err) {
-    console.error("❌ Error processing tick:", err.message);
-  }
 }
 
 // --- BROADCAST ---

@@ -114,6 +114,7 @@ import errorHandler from './middleware/errorHandler.js';
 import authMiddleware from './middleware/auth.js';
 import cacheMiddleware from './middleware/cache.js';
 
+
 // -------------------------------------------------------------
 // Initialize Express app
 const app = express();
@@ -202,6 +203,7 @@ const { default: dividendRoutes } = await import('./routes/dividend.js');
 const { default: nseRoutes } = await import('./routes/nse.js');
 const { default: fundsRoutes } = await import('./routes/funds.js');
 const { default: casRoutes } = await import('./routes/cas.js');
+const { default: camsRoutes } = await import('./routes/cams.js');
 const { default: npsPdfRoutes } = await import('./routes/npsPdf.js');
 const { default: npsFetchRoutes } = await import('./routes/npsFetch.js');
 const { default: zerodhaRoutes } = await import('./routes/zerodha.js');
@@ -229,6 +231,7 @@ app.use('/api/dividend', dividendRoutes);
 app.use('/api/nse', nseRoutes);
 app.use('/funds', fundsRoutes);
 app.use('/api/cas', casRoutes);
+app.use('/api/cams', camsRoutes);
 app.use('/api/nps-pdf', npsPdfRoutes);
 app.use('/api/nps-fetch', npsFetchRoutes);
 app.use('/api/zerodha', zerodhaRoutes);
@@ -248,6 +251,7 @@ const { initCasAutomation } = await import('./services/casAutomationService.js')
 const { initAmfiNavService, updateAllFundsNAV, fetchNAVByDate } = await import('./services/amfiNavService.js');
 const { default: initializeZerodhaScheduler } = await import('./services/zerodha/scheduler.js');
 const { initMaintenanceService } = await import('./services/maintenanceService.js');
+const { initializeCASScheduler } = await import('./services/casScheduler.js');
 app.get('/kite/callback', zerodhaCallback);
 
 // 🔹 Corporate Action manual trigger route
@@ -610,6 +614,7 @@ console.log(`🚀 Server running on port ${PORT}`);
     initAmfiNavService();
     initializeZerodhaScheduler();
     initMaintenanceService();
+    initializeCASScheduler();
   } catch (err) {
     console.error('[Angel] Error initializing live prices:', err);
   }
