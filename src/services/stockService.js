@@ -14,6 +14,11 @@ const toNumber = (value) => {
 
 const MS_PER_YEAR = 1000 * 60 * 60 * 24 * 365;
 
+export function isOpenStockHoldingTransaction(txn = {}) {
+  const sellDate = txn?.sell_date;
+  return sellDate === null || sellDate === undefined || sellDate === '';
+}
+
 /**
  * Calculate XIRR using Newton-Raphson bisection method
  */
@@ -104,23 +109,17 @@ async function getAccountNames(supabase) {
  */
 export async function getOpenStockData(supabase, priceSource = 'stock_master') {
   try {
-    // Fetch open transactions for Free/Regular accounts
     const { data: transactions, error: txnError } = await fetchAllRows(
       supabase,
       'stock_transactions',
       {
-        select: 'id, stock_name, quantity, buy_price, buy_date, account_name, account_type, equity_type',
-        filters: [
-          (q) => q.is('sell_date', null)
-        ],
+        select: 'id, stock_name, quantity, buy_price, buy_date, account_name, account_type, equity_type, sell_date',
       }
     );
 
-    const filteredTransactions = (transactions || []).filter(t => 
-      t.equity_type?.toLowerCase() === 'stocks' && ['free', 'regular'].includes(t.account_type?.toLowerCase())
-    );
-
     if (txnError) throw txnError;
+
+    const filteredTransactions = (transactions || []).filter(isOpenStockHoldingTransaction);
 
     // Determine which table to fetch from
     const priceTable = priceSource === 'stock_mapping' ? 'stock_mapping' : 'stock_master';
