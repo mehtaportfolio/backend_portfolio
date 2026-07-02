@@ -44,9 +44,11 @@ function normalizeSymbol(symbol) {
 
   symbol = symbol.trim();
 
-  return symbol.toUpperCase().endsWith('-EQ')
+  const normalized = symbol.toUpperCase().endsWith('-EQ')
     ? symbol.slice(0, -3)
     : symbol;
+
+  return normalized.trim().toUpperCase();
 }
 
 async function getEquityPositionTokens() {
@@ -478,8 +480,18 @@ export async function subscribeSingleStock(symbol) {
       .single();
 
     if (error || !data) {
-      console.error('[Angel] Stock not found:', symbol);
-      return false;
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from('stock_master')
+        .select('stock_name, symbol_token, exchange')
+        .ilike('symbol', normalized)
+        .single();
+
+      if (fallbackError || !fallbackData) {
+        console.error('[Angel] Stock not found:', symbol);
+        return false;
+      }
+
+      data = fallbackData;
     }
 
     const token = data.symbol_token;
