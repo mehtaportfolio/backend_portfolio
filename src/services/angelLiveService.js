@@ -582,31 +582,12 @@ async function updateEquityPositionLastPrice(symbol, lastPrice) {
 
 function handleTick(msg) {
 
-    console.log("========== HANDLE TICK CALLED ==========");
-    console.dir(msg, { depth: null });
-
     try {
 
-        if (!msg) {
-            console.log("msg is null");
-            return;
-        }
-
-        if (!msg.token) {
-            console.log("No token field");
-            return;
-        }
-
+ 
         const rawToken = msg.token.toString().replace(/"/g, '');
 
-        console.log(
-            '[Angel Tick]',
-            rawToken,
-            tokenToSymbolMap[rawToken],
-            parseFloat(msg.last_traded_price) / 100
-        );
-
-        const symbol = tokenToSymbolMap[rawToken] || rawToken;
+      p[rawToken] || rawToken;
 
         const tick = {
             symbol,

@@ -1695,26 +1695,27 @@ export async function getBulkExportData(tables) {
       }
     };
 
-    // Fetch data for each requested table
+    // Fetch data for each requested table. Use specific select when available, otherwise fetch all columns.
     for (const tableName of tables) {
-      if (tableConfigs[tableName]) {
-        try {
-          const config = tableConfigs[tableName];
-          const { data, error } = await fetchAllRows(supabase, tableName, {
-            select: config.select,
-            filters: config.filters.map(f => (q) => q[f.operator || 'eq'](f.column, f.value))
-          });
+      try {
+        const config = tableConfigs[tableName];
+        const selectClause = config ? config.select : '*';
+        const filters = config && config.filters ? config.filters.map(f => (q) => q[f.operator || 'eq'](f.column, f.value)) : [];
 
-          if (error) {
-            console.error(`Error fetching ${tableName}:`, error);
-            result[tableName] = [];
-          } else {
-            result[tableName] = data || [];
-          }
-        } catch (error) {
+        const { data, error } = await fetchAllRows(supabase, tableName, {
+          select: selectClause,
+          filters
+        });
+
+        if (error) {
           console.error(`Error fetching ${tableName}:`, error);
           result[tableName] = [];
+        } else {
+          result[tableName] = data || [];
         }
+      } catch (error) {
+        console.error(`Error fetching ${tableName}:`, error);
+        result[tableName] = [];
       }
     }
 
