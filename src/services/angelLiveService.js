@@ -581,17 +581,30 @@ async function updateEquityPositionLastPrice(symbol, lastPrice) {
 }
 
 function handleTick(msg) {
-
     try {
+        if (!msg || !msg.token) {
+            console.warn('[Angel] handleTick received invalid message:', msg);
+            return;
+        }
 
- 
-        const rawToken = msg.token.toString().replace(/"/g, '');
+        const rawToken = String(msg.token).replace(/"/g, '');
+        const tokenEntry = tokenToSymbolMap[rawToken] || tokenToSymbolMap[rawToken.toString()];
+        const symbol = tokenEntry ? (typeof tokenEntry === 'string' ? tokenEntry : tokenEntry.symbol) : null;
 
-      p[rawToken] || rawToken;
+        if (!symbol) {
+            console.warn('[Angel] Unknown token received:', rawToken);
+            return;
+        }
+
+        const lastPrice = parseFloat(msg.last_traded_price);
+        if (Number.isNaN(lastPrice)) {
+            console.warn('[Angel] Invalid last_traded_price for', symbol, msg.last_traded_price);
+            return;
+        }
 
         const tick = {
             symbol,
-            ltp: parseFloat(msg.last_traded_price) / 100
+            ltp: lastPrice / 100
         };
 
         const previousTick = lastTicks[symbol];
@@ -602,9 +615,8 @@ function handleTick(msg) {
         if (!previousTick || previousTick.ltp !== tick.ltp) {
             updateEquityPositionLastPrice(symbol, tick.ltp);
         }
-
     } catch (err) {
-        console.error(err);
+        console.error('[Angel] handleTick error:', err.message || err);
     }
 }
 

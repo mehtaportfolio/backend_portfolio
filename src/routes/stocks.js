@@ -279,7 +279,7 @@ router.get('/angel-one-health', authMiddleware, (req, res) => {
  */
 router.get('/angel-one-sync', authMiddleware, async (req, res) => {
   try {
-    const result = await angelOneSync();
+    const result = await angelOneSync({ forceRefresh: true });
     
     if (!result) {
       return res.status(500).json({ 

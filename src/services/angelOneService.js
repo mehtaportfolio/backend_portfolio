@@ -340,10 +340,33 @@ export async function syncMarketData() {
     }
 }
 
+export function buildPositionSyncPlan(formatted, existingToday, options = {}) {
+    const forceRefresh = Boolean(options?.forceRefresh);
+    const existingMap = new Map((existingToday || []).map((row) => [row.symbol, row]));
+    const inserts = [];
+    const updates = [];
+
+    (formatted || []).forEach((item) => {
+        const existing = existingMap.get(item.symbol);
+        if (!existing) {
+            inserts.push(item);
+            return;
+        }
+
+        const qtyChanged = Number(existing.quantity) !== Number(item.quantity);
+        const avgChanged = Number(existing.average_price) !== Number(item.average_price);
+        if (forceRefresh || qtyChanged || avgChanged) {
+            updates.push(item);
+        }
+    });
+
+    return { inserts, updates };
+}
+
 /**
  * Fetch and store today's net open positions from order book
  */
-export async function fetchTodayBuyTrades() {
+export async function fetchTodayBuyTrades(options = {}) {
     ensureSmartApi();
     if (!sessionData) {
         const loginResult = await login();
@@ -359,6 +382,8 @@ export async function fetchTodayBuyTrades() {
 
         log("Fetching today\'s Angel One order book for open positions...");
         const response = await smartApi.getOrderBook();
+
+
 
         if (!response.status) {
             log(`Orderbook API failed: ${response.message}`, 'ERROR');
@@ -383,33 +408,52 @@ export async function fetchTodayBuyTrades() {
             };
         }
 
-        const todayOrders = orders.filter((order) => {
+        const parseOrderTimestamp = (order) => {
+            const ts = order.orderdate || order.orderdatetime || order.filltime || order.datetime || order.updatedtime || order.updatetime || order.exchtime || order.exchorderupdatetime || order.order_date;
+            if (!ts) return null;
+            const date = new Date(ts);
+            if (!isNaN(date.getTime())) return date.toISOString().split('T')[0];
+            // Fallback for formats like 20-Oct-2020 13:10:59
+            const normalized = String(ts).replace(/-/g, ' ').replace(/:/g, ':');
+            const parsed = new Date(normalized);
+            return !isNaN(parsed.getTime()) ? parsed.toISOString().split('T')[0] : null;
+        };
+
+        const getFilledQuantity = (order) => {
+            return Number(order.filledshares || order.fillsize || order.fillquantity || order.quantity || order.orderquantity || 0);
+        };
+
+        const getOrderPrice = (order) => {
+            return Number(order.averageprice || order.fillprice || order.price || order.avgprice || 0);
+        };
+
+        const isRelevantOrder = (order) => {
             const txnType = String(order.transactiontype || order.transactionType || '').toUpperCase();
             if (!['BUY', 'SELL'].includes(txnType)) return false;
 
-            const ts = order.orderdate || order.orderdatetime || order.filltime || order.datetime || order.updatedtime;
-            if (!ts) return false;
-
-            try {
-                return new Date(ts).toISOString().split('T')[0] === today;
-            } catch (err) {
-                return false;
-            }
-        });
-
-        const isCompletedOrder = (order) => {
-            const status = String(order.status || '').toUpperCase();
-            return status === 'COMPLETE' || status === 'FILLED' || status === 'TRADED' || status === 'EXECUTED' || status === 'VALIDATED' || status === '';
+            const orderDate = parseOrderTimestamp(order);
+            if (!orderDate) return false;
+            return orderDate === today;
         };
+
+        const shouldCountOrder = (order) => {
+            const status = String(order.status || order.orderstatus || '').toUpperCase();
+            const invalidStates = new Set(['CANCELLED', 'REJECTED', 'EXPIRED', 'FAILED']);
+            if (invalidStates.has(status)) return false;
+            const qty = getFilledQuantity(order);
+            return qty > 0;
+        };
+
+        const todayOrders = orders.filter((order) => isRelevantOrder(order));
 
         const lotBuckets = new Map();
 
         todayOrders.forEach((order) => {
-            if (!isCompletedOrder(order)) return;
+            if (!shouldCountOrder(order)) return;
 
             const symbol = order.tradingsymbol || order.tradingSymbol || order.symbol || order.symbolname || '';
-            const qty = Number(order.quantity || order.fillsize || order.fillquantity || order.orderquantity || 0);
-            const price = Number(order.averageprice || order.fillprice || order.price || order.avgprice || 0);
+            const qty = getFilledQuantity(order);
+            const price = getOrderPrice(order);
             const txnType = String(order.transactiontype || order.transactionType || '').toUpperCase();
 
             if (!symbol || qty <= 0) return;
@@ -478,19 +522,7 @@ export async function fetchTodayBuyTrades() {
             ]
         });
 
-        const existingMap = new Map(existingToday?.map(r => [r.symbol, r]) || []);
-
-        const dataToInsert = [];
-        const dataToUpdate = [];
-
-        formatted.forEach(item => {
-            const existing = existingMap.get(item.symbol);
-            if (!existing) {
-                dataToInsert.push(item);
-            } else if (Number(existing.quantity) !== Number(item.quantity) || Number(existing.average_price) !== Number(item.average_price)) {
-                dataToUpdate.push(item);
-            }
-        });
+        const { inserts: dataToInsert, updates: dataToUpdate } = buildPositionSyncPlan(formatted, existingToday, options);
 
         let insertedCount = 0;
         let updatedCount = 0;
