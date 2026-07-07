@@ -353,7 +353,11 @@ export async function fetchTodayBuyTrades() {
     }
 
     try {
-        log("Fetching today's order book...");
+        const today = new Date().toISOString().split("T")[0];
+        const clientId = process.env.ANGEL_CLIENT_ID || 'PM';
+        const formatted = [];
+
+        log("Fetching today\'s Angel One order book for open positions...");
         const response = await smartApi.getOrderBook();
 
         if (!response.status) {
@@ -370,20 +374,20 @@ export async function fetchTodayBuyTrades() {
             return {
                 success: true,
                 message: "No orders found for today",
-                orders: [],
+                positions: [],
                 formatted: [],
                 inserted: 0,
                 updated: 0,
-                today: new Date().toISOString().split("T")[0]
+                today,
+                orders: []
             };
         }
 
-        const today = new Date().toISOString().split("T")[0];
         const todayOrders = orders.filter((order) => {
             const txnType = String(order.transactiontype || order.transactionType || '').toUpperCase();
             if (!['BUY', 'SELL'].includes(txnType)) return false;
 
-            const ts = order.orderdate || order.orderdatetime || order.filltime || order.filltime || order.datetime || order.updatedtime;
+            const ts = order.orderdate || order.orderdatetime || order.filltime || order.datetime || order.updatedtime;
             if (!ts) return false;
 
             try {
@@ -399,7 +403,6 @@ export async function fetchTodayBuyTrades() {
         };
 
         const lotBuckets = new Map();
-        const clientId = process.env.ANGEL_CLIENT_ID;
 
         todayOrders.forEach((order) => {
             if (!isCompletedOrder(order)) return;
@@ -429,7 +432,6 @@ export async function fetchTodayBuyTrades() {
             lotBuckets.set(symbol, bucket);
         });
 
-        const formatted = [];
         for (const [symbol, lots] of lotBuckets.entries()) {
             const remainingQty = lots.reduce((sum, lot) => sum + lot.qty, 0);
             if (remainingQty <= 0) continue;
@@ -449,6 +451,19 @@ export async function fetchTodayBuyTrades() {
                 position_date: today,
                 fetched_at: new Date().toISOString()
             });
+        }
+
+        if (formatted.length === 0) {
+            return {
+                success: true,
+                message: "No open Angel One positions found for today",
+                positions: [],
+                formatted: [],
+                inserted: 0,
+                updated: 0,
+                today,
+                orders: todayOrders
+            };
         }
 
         // 1. Delete rows with date < today (Requirement 1)

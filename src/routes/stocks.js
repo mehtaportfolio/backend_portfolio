@@ -296,6 +296,7 @@ router.get('/angel-one-sync', authMiddleware, async (req, res) => {
     }
 
     const { orders = [], formatted = [], inserted = 0, updated = 0, today = null } = result;
+    const accountId = process.env.ANGEL_CLIENT_ID || 'PM';
     
     if (!Array.isArray(formatted) || formatted.length === 0) {
       const firstOrder = Array.isArray(orders) && orders.length > 0 ? orders[0] : null;
@@ -305,7 +306,7 @@ router.get('/angel-one-sync', authMiddleware, async (req, res) => {
 
       return res.json({ 
         status: 'success',
-        message: `No CNC BUY trades found for today (${today}) in PSM. Total orders found: ${Array.isArray(orders) ? orders.length : 0}. First order: ${firstOrderStr}`,
+        message: `No open Angel One positions found for today (${today}) in PM Angel One (${accountId}). Total orders found: ${Array.isArray(orders) ? orders.length : 0}. First order: ${firstOrderStr}`,
         data: []
       });
     }
