@@ -347,7 +347,9 @@ export async function fetchTodayBuyTrades() {
     ensureSmartApi();
     if (!sessionData) {
         const loginResult = await login();
-        if (!loginResult.success) return;
+        if (!loginResult.success) {
+            return { success: false, message: loginResult.message || 'Angel One login failed' };
+        }
     }
 
     try {
@@ -359,18 +361,20 @@ export async function fetchTodayBuyTrades() {
             if (response.message === 'Invalid Token' || response.message.includes('Token expired') || response.errorcode === 'AG8001') {
                 sessionData = null;
             }
-            return;
+            return { success: false, message: response.message || 'Order book fetch failed' };
         }
 
         const orders = response.data || [];
         if (orders.length === 0) {
             log("No orders found for today.");
             return {
+                success: true,
                 message: "No orders found for today",
                 orders: [],
                 formatted: [],
                 inserted: 0,
-                updated: 0
+                updated: 0,
+                today: new Date().toISOString().split("T")[0]
             };
         }
 

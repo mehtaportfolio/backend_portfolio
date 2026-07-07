@@ -281,24 +281,31 @@ router.get('/angel-one-sync', authMiddleware, async (req, res) => {
   try {
     const result = await angelOneSync();
     
-    if (!result || !result.success) {
+    if (!result) {
       return res.status(500).json({ 
         status: 'error', 
-        message: result?.message || 'Failed to sync Angel One trades' 
+        message: 'Angel One sync returned no response'
       });
     }
 
-    const { trades, formatted, inserted, updated, today } = result;
+    if (!result.success) {
+      return res.status(500).json({ 
+        status: 'error', 
+        message: result.message || 'Failed to sync Angel One trades' 
+      });
+    }
+
+    const { orders = [], formatted = [], inserted = 0, updated = 0, today = null } = result;
     
-    if (formatted.length === 0) {
-      const firstTrade = trades.length > 0 ? trades[0] : null;
-      const firstTradeStr = firstTrade ? 
-        `[Prod: ${firstTrade.producttype || firstTrade.product}, Type: ${firstTrade.transactiontype}, Symbol: ${firstTrade.tradingsymbol || firstTrade.symbol}]` : 
+    if (!Array.isArray(formatted) || formatted.length === 0) {
+      const firstOrder = Array.isArray(orders) && orders.length > 0 ? orders[0] : null;
+      const firstOrderStr = firstOrder ? 
+        `[Prod: ${firstOrder.producttype || firstOrder.product}, Type: ${firstOrder.transactiontype}, Symbol: ${firstOrder.tradingsymbol || firstOrder.symbol}]` : 
         "None";
 
       return res.json({ 
         status: 'success',
-        message: `No CNC BUY trades found for today (${today}) in PSM. Total trades found: ${trades.length}. First trade: ${firstTradeStr}`,
+        message: `No CNC BUY trades found for today (${today}) in PSM. Total orders found: ${Array.isArray(orders) ? orders.length : 0}. First order: ${firstOrderStr}`,
         data: []
       });
     }
