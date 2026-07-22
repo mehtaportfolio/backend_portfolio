@@ -256,12 +256,24 @@ async function startAngelWS() {
 
   smartWS.on("tick", handleTick);
 
-  smartWS.on("message", (data) => {
+ smartWS.on("message", (data) => {
+    if (data === "pong" || data?.toString() === "pong") {
+        return;
+    }
+
     try {
-      const msg = typeof data === "string" ? JSON.parse(data) : data;
-      handleTick(msg);
-    } catch (e) {}
-  });
+        const msg =
+            typeof data === "string"
+                ? JSON.parse(data)
+                : data;
+
+        if (!msg.token) return;
+
+        handleTick(msg);
+    } catch (err) {
+        // Ignore non-JSON heartbeat messages
+    }
+});
 
   smartWS.on("close", () => {
     setTimeout(startAngelWS, 5000);
