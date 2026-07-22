@@ -14,6 +14,15 @@ const toNumber = (value) => {
 
 const MS_PER_YEAR = 1000 * 60 * 60 * 24 * 365;
 
+export function sanitizeBonusSplitValue(value) {
+  if (value == null || value === '') return 0;
+
+  const parsed = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isFinite(parsed)) return 0;
+
+  return parsed;
+}
+
 export function isOpenStockHoldingTransaction(txn = {}) {
   const sellDate = txn?.sell_date;
   return sellDate === null || sellDate === undefined || sellDate === '';
@@ -1884,19 +1893,22 @@ export async function applyBonusSplitAction(supabase, record) {
       let newSell = t.sell_price;
 
       if (record.type === "Bonus") {
-        newQty = t.quantity * (1 + x / y);
-        newBuy = t.buy_price / (1 + x / y);
-        newSell = (t.sell_price && t.sell_price > 0) ? t.sell_price / (1 + x / y) : null;
+        newQty = sanitizeBonusSplitValue(t.quantity) * (1 + (x / y));
+        newBuy = sanitizeBonusSplitValue(t.buy_price) / (1 + (x / y));
+        newSell = (sanitizeBonusSplitValue(t.sell_price) > 0) ? sanitizeBonusSplitValue(t.sell_price) / (1 + (x / y)) : null;
       } else if (record.type === "Split") {
-        newQty = t.quantity * (x / y);
-        newBuy = t.buy_price / (x / y);
-        newSell = (t.sell_price && t.sell_price > 0) ? t.sell_price / (x / y) : null;
+        newQty = sanitizeBonusSplitValue(t.quantity) * (x / y);
+        newBuy = sanitizeBonusSplitValue(t.buy_price) / (x / y);
+        newSell = (sanitizeBonusSplitValue(t.sell_price) > 0) ? sanitizeBonusSplitValue(t.sell_price) / (x / y) : null;
       }
 
-      const { error: updErr } = await updateRows(supabase, "stock_transactions", 
-        { quantity: newQty, buy_price: newBuy, sell_price: newSell }, 
-        { id: t.id }
-      );
+      const updates = {
+        quantity: sanitizeBonusSplitValue(newQty),
+        buy_price: sanitizeBonusSplitValue(newBuy),
+        sell_price: newSell == null ? null : sanitizeBonusSplitValue(newSell),
+      };
+
+      const { error: updErr } = await updateRows(supabase, "stock_transactions", updates, { id: t.id });
       
       if (updErr) throw updErr;
     }
@@ -1950,19 +1962,22 @@ export async function revertBonusSplitAction(supabase, record) {
       let newSell = t.sell_price;
 
       if (record.type === "Bonus") {
-        newQty = t.quantity / (1 + x / y);
-        newBuy = t.buy_price * (1 + x / y);
-        newSell = (t.sell_price && t.sell_price > 0) ? t.sell_price * (1 + x / y) : null;
+        newQty = sanitizeBonusSplitValue(t.quantity) / (1 + (x / y));
+        newBuy = sanitizeBonusSplitValue(t.buy_price) * (1 + (x / y));
+        newSell = (sanitizeBonusSplitValue(t.sell_price) > 0) ? sanitizeBonusSplitValue(t.sell_price) * (1 + (x / y)) : null;
       } else if (record.type === "Split") {
-        newQty = t.quantity / (x / y);
-        newBuy = t.buy_price * (x / y);
-        newSell = (t.sell_price && t.sell_price > 0) ? t.sell_price * (x / y) : null;
+        newQty = sanitizeBonusSplitValue(t.quantity) / (x / y);
+        newBuy = sanitizeBonusSplitValue(t.buy_price) * (x / y);
+        newSell = (sanitizeBonusSplitValue(t.sell_price) > 0) ? sanitizeBonusSplitValue(t.sell_price) * (x / y) : null;
       }
 
-      const { error: updErr } = await updateRows(supabase, "stock_transactions", 
-        { quantity: newQty, buy_price: newBuy, sell_price: newSell }, 
-        { id: t.id }
-      );
+      const updates = {
+        quantity: sanitizeBonusSplitValue(newQty),
+        buy_price: sanitizeBonusSplitValue(newBuy),
+        sell_price: newSell == null ? null : sanitizeBonusSplitValue(newSell),
+      };
+
+      const { error: updErr } = await updateRows(supabase, "stock_transactions", updates, { id: t.id });
       
       if (updErr) throw updErr;
     }
