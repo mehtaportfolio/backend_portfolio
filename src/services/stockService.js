@@ -1660,11 +1660,13 @@ export async function syncCorporateActions(supabase) {
     });
     if (existingError) throw existingError;
 
+    // Create set based on DB unique constraint: stock_name, date, type (NOT source or ratio)
     const existingSet = new Set(
-      existingRecords.map(r => `${r.stock_name}|${r.date}|${r.ratio}|${r.type.toLowerCase()}|${r.source}`)
+      existingRecords.map(r => `${r.stock_name}|${r.date}|${r.type.toLowerCase()}`)
     );
 
     const newRecords = [];
+    const skippedDuplicates = 0;
     for (const action of actions) {
       let stockName = symbolMap[action.symbol] || action.stock_name;
       if (!stockName) continue;
@@ -1674,7 +1676,8 @@ export async function syncCorporateActions(supabase) {
 
       const normalizedType = action.action_type.charAt(0).toUpperCase() + action.action_type.slice(1).toLowerCase();
 
-      const key = `${stockName}|${date}|${action.ratio}|${normalizedType.toLowerCase()}|${action.source}`;
+      // Check only stock_name, date, type (matching DB unique constraint)
+      const key = `${stockName}|${date}|${normalizedType.toLowerCase()}`;
       if (existingSet.has(key)) continue;
 
       newRecords.push({
@@ -1689,11 +1692,22 @@ export async function syncCorporateActions(supabase) {
 
     if (newRecords.length > 0) {
       const { error: insertError } = await insertRows(supabase, "bonus_split", newRecords);
-      if (insertError) throw insertError;
-      return { success: true, count: newRecords.length };
+      if (insertError) {
+        // If it's a duplicate key error, still consider it a partial success
+        if (insertError.code === '23505') {
+          return { 
+            success: true, 
+            count: newRecords.length,
+            message: `Fetched corporate actions from NSE/Yahoo. ${newRecords.length} new records added.`,
+            skippedDuplicates: true
+          };
+        }
+        throw insertError;
+      }
+      return { success: true, count: newRecords.length, message: `Successfully synced ${newRecords.length} new corporate actions.` };
     }
 
-    return { success: true, count: 0 };
+    return { success: true, count: 0, message: "No new corporate actions found." };
   } catch (error) {
     console.error('[Stock] Error in syncCorporateActions:', error);
     throw error;

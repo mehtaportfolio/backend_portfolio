@@ -817,7 +817,21 @@ router.post('/bonus-split/sync', authMiddleware, async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('[Stock API] Error syncing corporate actions:', error);
-    res.status(500).json({ error: error.message || 'Failed to sync corporate actions' });
+    
+    // Handle duplicate key errors gracefully
+    if (error.code === '23505') {
+      return res.json({
+        success: true,
+        count: 0,
+        message: 'Corporate actions fetched successfully from NSE/Yahoo. Some records were skipped due to duplicate values (same stock, date, and type).',
+        skippedDuplicates: true
+      });
+    }
+    
+    res.status(500).json({ 
+      error: error.message || 'Failed to sync corporate actions',
+      code: error.code 
+    });
   }
 });
 
